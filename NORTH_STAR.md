@@ -32,7 +32,9 @@ Only what no layer can answer reaches the owner.
   owner only after every layer in that codebase has been checked and raised to
   the standard. A check that is already merged decides the kind of a change. The
   change's own code never decides it. An unknown kind goes to the owner. Until a
-  codebase reaches that point, the owner merges every PR there.
+  codebase reaches that point, every PR there needs the owner's OK. A list of
+  changes that the owner approved counts as that OK for each PR that does exactly
+  one item on it.
 - **Requests.** A request reaches the owner only when no check and no written
   rule can answer it. This includes requests for more test runs or more
   permissions.
