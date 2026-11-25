@@ -24,6 +24,8 @@ for the order of work. This repo is public.
 - **Plain words.** Short sentences, one idea each, active voice.
 - **Comments.** A comment explains only a reason, an invariant or an outside
   contract that the code cannot show.
+- **Parked work.** Do not restore anything from the tag `archive/run-anywhere`
+  without an owner decision.
 
 ## Checks
 
@@ -69,10 +71,3 @@ paste it into a chat, an issue or a PR.
   PR, review and comment text directly, by Bash or WebFetch, and points to
   `scripts/gh-read.sh`. Codex has no such hook; it follows the rule above.
   Titles in lists, PR diffs and CI logs are not covered.
-- `.github/workflows/tripwire.yml` fails when anyone but the owner lands a
-  commit on `main`.
-
-## Parked work
-
-The tag `archive/run-anywhere` holds the earlier work: the portable control plane
-and the old manager loop. Do not bring any of it back without an owner decision.

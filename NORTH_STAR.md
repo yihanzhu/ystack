@@ -61,8 +61,8 @@ Automation comes only after the pass has worked by hand on two codebases.
 ## Stopped
 
 The run-anywhere work has stopped: alternative harness and forge adapters,
-portability proofs and sandbox proofs. It is parked, and Git keeps its full
-history. [ROADMAP.md](ROADMAP.md) step 2 names where.
+portability proofs and sandbox proofs. It is parked at the tag
+`archive/run-anywhere`, and Git keeps its full history.
 
 ## North-star log
 
