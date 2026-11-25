@@ -43,7 +43,8 @@ cd ~/git/ystack && kit/install.sh && git config core.hooksPath .githooks && scri
 ```
 
 `kit/install.sh` adds a marked block to `~/.claude/CLAUDE.md` and to `~/.codex/AGENTS.md`,
-links the kit skills, and changes nothing else. The first install is always this manual
+and links the kit skills. It also removes kit skill links whose folder is gone, and the
+parked yshifu command in `~/.claude/commands`. It changes nothing else. The first install is always this manual
 run. After that, a `git pull` that merges or fast-forwards in this checkout refreshes it. `kit/install.sh --check` says whether it is current.
 A work computer installs only this repo.
 

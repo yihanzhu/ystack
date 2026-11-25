@@ -1,6 +1,6 @@
 ---
 name: ystack-layer-pass
-description: "Go over a codebase one layer at a time (design, checks, verification, written rules, a person), write findings for the owner to pick from, and set which kinds of change may merge without the owner."
+description: "Go over a codebase one layer at a time (design, checks, verification, written rules, a person), write findings for the owner to pick from, and set which kinds of change may merge without the owner. Use it when the owner asks to review a whole repository. It does not review one diff or pull request."
 ---
 
 # Layer Pass
@@ -28,8 +28,8 @@ Each layer has one question. Each layer down costs more. A fix goes into the hig
 | --- | --- | --- | --- |
 | 1. Design | Does the design take wrong choices away, so an agent cannot make them? | Shared constants and components, schemas, types, generated assets. Hand-written copies that skip the shared code. | Search for hand-written copies of a shared rule. List the schema fields that accept free text. |
 | 2. Checks | Do lints, types, tests and CI run on every change, and can they stop one? | CI steps, hooks and tests. The rules in force on main and the required checks. Direct pushes to main. Whether the local command matches CI. | Read the rules in force on main. Read check results on recent merged PRs. List commits on main's first-parent line that have no PR. Compare the local command with each CI step. |
-| 3. Verification | Can someone verify what the code does when it runs, with runtime checks or evals? | Whether tests run on the real build and runtime. The platform layer: headers, routes, functions. Output that a person judges by looking. Evals where a model makes decisions. What breaks outside the code: links, scheduled jobs. | Read the test server setup. Read what the docs say the tests do not cover. Find claims of "same output" that only an agent's word supports. |
-| 4. Written rules | Are the rules for agents written next to the code they are about? | `AGENTS.md`, notes and comments. Rules that live only in one agent's private memory. | Compare agent memory and the owner's notes with the repository. Find written rules that must hold every time. |
+| 3. Verification | Can someone verify what the code does when it runs, with runtime checks or evals? | Whether tests run on the real build and runtime. The platform layer: headers, routes, functions. Output that a person judges by looking. Evals where a model makes decisions. What breaks outside the code: links, scheduled jobs. | Read the test server setup. Read what the docs say the tests do not cover. Find claims of "same output" that only an agent's word supports. For each key behavior, name a check that a plausible wrong implementation would fail. |
+| 4. Written rules | Are the rules for agents written next to the code they are about? | `AGENTS.md`, notes and comments. Rules that live only in one agent's private memory. | Compare agent memory and the owner's notes with the repository. Find written rules that must hold every time. Run the agent's own prompt audit when it has one (Claude Code: `/doctor prompt-audit`). |
 | 5. A person | Which changes must a person still look at? | Who merges, and how. Which kinds of change a check could let through. | Sort recent PRs by kind of change. Read the owner's rules for the codebase. |
 
 ## A finding

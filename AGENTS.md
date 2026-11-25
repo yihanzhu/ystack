@@ -63,8 +63,7 @@ paste it into a chat, an issue or a PR.
 - The `ystack-main-gate` ruleset requires a PR and a green `ci` check for `main`.
 - `.claude/hooks/no-merge-guard.sh` blocks Claude Code from merging, from
   pushing to `main`, and from changing rulesets, branch protection or the
-  default branch. Claude Code runs this hook from the owner's main checkout, so
-  a merged change to it is live only after that checkout is updated.
+  default branch.
 - `scripts/check-public.sh` blocks the owner's blocked terms, secrets, and
   machine-specific values: home-directory paths, local host names, and agent
   permission lists and trust settings. The `.githooks/` hooks run it on the index
@@ -78,3 +77,6 @@ paste it into a chat, an issue or a PR.
   PR, review and comment text directly, by Bash or WebFetch, and points to
   `scripts/gh-read.sh`. Codex has no such hook; it follows the rule above.
   Titles in lists, PR diffs and CI logs are not covered.
+- Claude Code runs both `.claude/hooks` scripts only in sessions opened in a
+  ystack checkout, and it runs them from the owner's main checkout. So a merged
+  change to either hook is live only after that checkout is updated.
