@@ -61,9 +61,10 @@ paste it into a chat, an issue or a PR.
 ## Enforcement
 
 - The `ystack-main-gate` ruleset requires a PR and a green `ci` check for `main`.
-- `.claude/hooks/no-merge-guard.sh` blocks Claude Code from merging and from
-  pushing to `main`. Claude Code runs this hook from the owner's main checkout,
-  so a merged change to it is live only after that checkout is updated.
+- `.claude/hooks/no-merge-guard.sh` blocks Claude Code from merging, from
+  pushing to `main`, and from changing rulesets, branch protection or the
+  default branch. Claude Code runs this hook from the owner's main checkout, so
+  a merged change to it is live only after that checkout is updated.
 - `scripts/check-public.sh` blocks the owner's blocked terms, secrets, and
   machine-specific values: home-directory paths, local host names, and agent
   permission lists and trust settings. The `.githooks/` hooks run it on the index
