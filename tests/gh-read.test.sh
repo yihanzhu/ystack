@@ -92,14 +92,24 @@ out=$("$root/scripts/gh-read.sh" --owner stranger --from-json "$scratch/stranger
 check_output 'scripts/gh-read.sh runs the kit reader' "$out" 'OWNER-BODY' 'OWNER-COMMENT'
 check_owner 'scripts/gh-read.sh passes --owner on' "$out" stranger
 
-for args in '--owner' '--owner bad/login' '--owner -x'; do
-  # shellcheck disable=SC2086 # Each case is a list of arguments.
-  if "$read_item" $args --from-json "$scratch/owner.json" >/dev/null 2>&1; then
-    fail "bad owner fails: $args"
+# Runs the reader with arguments $2... and checks exit 2 and message $1.
+expect_error() {
+  local want=$1 got status
+  shift
+  got=$("$read_item" "$@" 2>&1 >/dev/null)
+  status=$?
+  if [ "$status" -eq 2 ] && [[ $got == *"$want"* ]]; then
+    pass "fails with '$want': $*"
   else
-    pass "bad owner fails: $args"
+    fail "fails with '$want': $* (exit $status)"
   fi
-done
+}
+expect_error 'needs LOGIN' --from-json "$scratch/owner.json" --owner
+expect_error 'bad owner login' --owner bad/login --from-json "$scratch/owner.json"
+expect_error 'bad owner login' --owner -x --from-json "$scratch/owner.json"
+
+out=$("$read_item" --owner mona-cat_octo --from-json "$scratch/owner.json")
+check_owner 'an enterprise managed login is accepted' "$out" mona-cat_octo
 
 fixture "$scratch/more.json" yihanzhu true
 if "$read_item" --from-json "$scratch/more.json" >/dev/null 2>&1; then

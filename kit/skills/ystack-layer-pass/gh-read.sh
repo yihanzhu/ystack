@@ -32,7 +32,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[[ $owner =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] || die "bad owner login"
+# Enterprise managed logins hold an underscore. A login that does not exist
+# only hides every text, so this check stops just empty and flag-like values.
+[[ $owner =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "bad owner login"
 
 work=$(mktemp -d) || exit 2
 trap 'rm -rf "$work"' EXIT
