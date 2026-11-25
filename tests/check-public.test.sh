@@ -11,8 +11,10 @@ repo=$scratch/repo
 failures=0
 
 fake_terms=$'# fake terms for this test\nZebraquill\nmoonfjord'
-fake_token="ghp_$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36)"
-fake_password=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
+# A fixed read first: with SIGPIPE ignored, as on CI runners, BSD tr never stops
+# reading an endless input after head exits.
+fake_token="ghp_$(head -c 1024 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 36)"
+fake_password=$(head -c 1024 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 20)
 printf '%s\n' zebraquill moonfjord "$fake_token" "$fake_password" config.txt notes.txt \
   > "$scratch/must-not-show"
 
