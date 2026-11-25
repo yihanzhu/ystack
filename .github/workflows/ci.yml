@@ -63,6 +63,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     # One output per leg. The matrix result alone can be success when a leg was
     # cancelled before it ran, so the gate also needs both outputs.
     outputs:
