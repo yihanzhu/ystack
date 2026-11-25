@@ -64,7 +64,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Shellcheck
+      - name: Install shellcheck
         env:
           SHELLCHECK_VERSION: "0.11.0"
           # Release-asset digest of the linux.x86_64 tar.xz. Check it before installing.
@@ -76,25 +76,9 @@ jobs:
           printf '%s  %s\n' "$SHELLCHECK_SHA256" /tmp/shellcheck.tar.xz | sha256sum -c -
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          got=$(shellcheck --version | awk '/^version:/ {print $2}')
-          [ "$got" = "$SHELLCHECK_VERSION" ] || { echo "shellcheck $got, want $SHELLCHECK_VERSION"; exit 1; }
-          git ls-files -z '*.sh' | xargs -0 -r shellcheck -x -S style
 
-      - name: Merge-guard hook test
-        run: bash tests/no-merge-guard.test.sh
-
-      - name: Public-repo guard test
-        run: |
-          scripts/get-gitleaks.sh
-          bash tests/check-public.test.sh
-
-      - name: Owner-only tests
-        run: |
-          bash tests/owner-only-guard.test.sh
-          bash tests/gh-read.test.sh
-
-      - name: Kit install test
-        run: bash tests/kit-install.test.sh
+      - name: Checks
+        run: scripts/check.sh --skip-tree
 
   # The main ruleset requires this job by its name, `ci`. A skipped job would
   # count as passing, so this one always runs and checks both results.

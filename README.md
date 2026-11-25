@@ -27,6 +27,7 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `.claude/hooks/owner-only-guard.sh` | Blocks Claude Code from reading issue and PR text directly. |
 | `scripts/gh-read.sh` | Reads an issue or PR and hides text from accounts other than the owner's. |
 | `scripts/check-public.sh` | Blocks the owner's blocked terms, secrets and machine-specific values. The term list is never committed. |
+| `scripts/check.sh` | Runs every check in this repo: shellcheck, the tests and the public-repo tree scan. |
 | `scripts/get-gitleaks.sh` | Gets the pinned secret scanner and checks its digest. |
 | `.githooks/` | Runs the public-repo check before each commit, and refreshes the kit after each pull. |
 | `tests/` | Tests for the checks. |
