@@ -42,7 +42,8 @@ case $tool in
 esac
 
 # A repository in a path: owner and name, or one variable that holds both.
-repo="(\\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?|[^/[:space:]\"']+/[^/[:space:]\"']+)"
+var="\\\$(\\{[^}]*\\}|[A-Za-z0-9_]+|[@*#?!-])"
+repo="(\"?$var\"?|[^/[:space:]]+/[^/[:space:]]+)"
 # Addresses that return issue, PR, review or comment text from any account.
 # A commit's pulls are full PR objects.
 api_text="api\\.github\\.com/(repos/$repo/((issues|pulls)|commits/[^/[:space:]\"']+/pulls)([/?#[:space:]\"']|\$)|search/issues|graphql|[^[:space:]\"']*/(comments|reviews|timeline)([/?#[:space:]\"']|\$))"
@@ -78,7 +79,8 @@ text_endpoint='/(comments|reviews|timeline|events)([^A-Za-z]|$)'
 # (of a repository, an organization, the user, all, or a commit), or an issue
 # search. A repository named issues is not a list. Sub-paths such as
 # pulls/$n/files are not items.
-item_one="(issues|pulls)/([0-9]+|\"?\\\$(\\{[^}]*\\}|[A-Za-z_][A-Za-z0-9_]*)\"?)([^A-Za-z0-9_/]|\$)"
+# A quote cannot end an item, so "$n"/files stays a sub-path.
+item_one="(issues|pulls)/([0-9]+|\"?$var\"?)([^A-Za-z0-9_/\"]|\$)"
 item_list="(repos/$repo/|orgs/[^/[:space:]]+/|user/|commits/[^/[:space:]\"']+/|[[:space:]\"']/?)(issues|pulls)([?[:space:]\"']|\$)|search/issues"
 
 # The only fields a --jq filter on issues or PRs may name. Other lists below
@@ -283,20 +285,9 @@ part_re="^(\"([^\"\\\\]|\\\\.)*\"|'[^']*'|\\\\.|[^|;&\"'\\\\])*"
 # command. Inner ones match first.
 subst_re=$'\\$\\(("([^"\\\\]|\\\\.)*"|\'[^\']*\'|[^()"\'])*\\)|`[^`]*`'
 
-# Checks one command line. Each command substitution is checked as its own
-# command line, then stands as $S in the outer one, as a variable would.
+# Checks one command line.
 check_line() {
-  local rest=$1 part sub
-  if [[ $rest == *\$\(* || $rest == *\`* ]]; then
-    while [[ $rest =~ $subst_re ]]; do
-      sub=${BASH_REMATCH[0]}
-      case $sub in
-        \$\(*) check_line "${sub:2:${#sub}-3}" ;;
-        *) check_line "${sub:1:${#sub}-2}" ;;
-      esac
-      rest=${rest/"$sub"/\$S}
-    done
-  fi
+  local rest=$1 part
   # Redirections such as 2>&1 are not command breaks.
   rest=${rest//&>/>}
   rest=${rest//>&/>}
@@ -315,19 +306,37 @@ check_line() {
   done
 }
 
-# Split into lines in memory: a here-string needs a temporary file in bash 3.2.
-set -f
-IFS=$'\n'
-# shellcheck disable=SC2206 # Splitting on line breaks is the point; set -f stops globbing.
-lines=($cmd)
-IFS=$' \t\n'
-set +f
-previous=''
-for line in ${lines[@]+"${lines[@]}"}; do
-  [[ $line == *gh[[:space:]]* || $line == *[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]* ]] || continue
-  # A line that just passed passes again.
-  [[ $line == "$previous" ]] && continue
-  previous=$line
-  check_line "$line"
-done
+# Checks commands that may span lines. Each command substitution, which may
+# span lines too, is checked on its own first, then stands as $S in the outer
+# text, as a variable would. Then each line is checked.
+check_text() {
+  local text=$1 sub line previous=''
+  local -a lines
+  if [[ $text == *\$\(* || $text == *\`* ]]; then
+    while [[ $text =~ $subst_re ]]; do
+      sub=${BASH_REMATCH[0]}
+      case $sub in
+        \$\(*) check_text "${sub:2:${#sub}-3}" ;;
+        *) check_text "${sub:1:${#sub}-2}" ;;
+      esac
+      text=${text/"$sub"/\$S}
+    done
+  fi
+  # Split into lines in memory: a here-string needs a temporary file in bash 3.2.
+  set -f
+  IFS=$'\n'
+  # shellcheck disable=SC2206 # Splitting on line breaks is the point; set -f stops globbing.
+  lines=($text)
+  IFS=$' \t\n'
+  set +f
+  for line in ${lines[@]+"${lines[@]}"}; do
+    [[ $line == *gh[[:space:]]* || $line == *[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]* ]] || continue
+    # A line that just passed passes again.
+    [[ $line == "$previous" ]] && continue
+    previous=$line
+    check_line "$line"
+  done
+}
+
+check_text "$cmd"
 exit 0
