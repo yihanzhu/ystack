@@ -1,6 +1,7 @@
 #!/bin/bash
-# PreToolUse guard for Bash. Agents never merge a PR and never push to main.
-# Exit 2 blocks the command. The owner merges every PR.
+# PreToolUse guard for Bash. It blocks pushes to main, PR merges, and changes to
+# rulesets or branch protection. Exit 2 blocks the command. The session that
+# wrote a PR never merges it; see "The owner's OK" in AGENTS.md.
 
 export LC_ALL=C
 
@@ -17,30 +18,46 @@ if IFS= read -r -d '' input || ! cmd=$(
   block "the hook could not read its input."
 fi
 [ -n "$cmd" ] || block "the hook got no command."
-# Lines joined, so a backslash line break inside a command still matches.
-flat=${cmd//$'\\\n'/ }
-flat=${flat//$'\n'/ }
 
-if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+push[^|;&]*[[:space:]:+](refs/heads/)?main([[:space:]]|$)'; then
+# Backslash line breaks are removed. grep reads line by line, so each line of
+# `joined` is one command line.
+joined=${cmd//$'\\\n'/ }
+
+# Flags with an optional value, as in `-R o/r`, `--repo=o/r` or `-C dir`.
+flags='([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]|;&][^[:space:]|;&]*)?)*'
+merge_msg="this session may not merge PRs. The session that wrote a PR never merges it."
+gate_msg="this session may not change rulesets or branch protection."
+
+if printf '%s' "$joined" |
+  grep -Eq "git${flags}[[:space:]]+push[^|;&]*[[:space:]:+\"'](refs/heads/)?main([^[:alnum:]_./:-]|\$)"; then
   block "no direct pushes to main. Push a branch and open a PR."
 fi
-# Only flags and their values may stand between `pr` and `merge`.
-if printf '%s' "$flat" |
-  grep -Eq "gh[[:space:]]+pr([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]|;&][^[:space:]|;&]*)?)*[[:space:]]+[\"']?merge([^[:alnum:]_-]|\$)"; then
-  block "agents never merge PRs. The owner merges every PR."
+if printf '%s' "$joined" |
+  grep -Eq "gh${flags}[[:space:]]+pr${flags}[[:space:]]+[\"']?merge([^[:alnum:]_-]|\$)"; then
+  block "$merge_msg"
 fi
 if printf '%s' "$cmd" | grep -Eq 'pulls/[^/[:space:]]+/merge|mergePullRequest|enablePullRequestAutoMerge'; then
-  block "agents never merge PRs through the API. The owner merges every PR."
+  block "$merge_msg"
 fi
-if printf '%s' "$flat" | grep -Eq '/rulesets([^[:alnum:]_-]|$)|branches/[^/[:space:]]+/protection'; then
-  if printf '%s' "$flat" | grep -Eiq "(-X|--method|--request)[[:space:]=]*[\"']?(PUT|PATCH|POST|DELETE)"; then
-    block "agents never change rulesets or branch protection."
+if printf '%s' "$cmd" | grep -Eq '(create|update|delete)(RepositoryRuleset|BranchProtectionRule)'; then
+  block "$gate_msg"
+fi
+
+# REST writes to the gate, read one command at a time: the parts between |, ;, &
+# and line breaks. The flag is case-sensitive (`grep -x` is not `-X`); the
+# method is not.
+method_flag='(^|[[:space:]])(-X|--method|--request)'
+write_method="${method_flag}[[:space:]=]*[\"']?([Pp][Uu][Tt]|[Pp][Aa][Tt][Cc][Hh]|[Pp][Oo][Ss][Tt]|[Dd][Ee][Ll][Ee][Tt][Ee])"
+while IFS= read -r part; do
+  printf '%s' "$part" | grep -Eq '/rulesets([^[:alnum:]_-]|$)|branches/[^/[:space:]]+/protection' || continue
+  if printf '%s' "$part" | grep -Eq "$write_method"; then
+    block "$gate_msg"
   fi
   # gh api sends a POST when it has fields or an input file and no method.
-  if ! printf '%s' "$flat" | grep -Eq '(^|[[:space:]])(-X|--method|--request)' &&
-    printf '%s' "$flat" | grep -Eq 'gh[[:space:]]+api' &&
-    printf '%s' "$flat" | grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)'; then
-    block "agents never change rulesets or branch protection."
+  if ! printf '%s' "$part" | grep -Eq "$method_flag" &&
+    printf '%s' "$part" | grep -Eq 'gh[[:space:]]+api' &&
+    printf '%s' "$part" | grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)'; then
+    block "$gate_msg"
   fi
-fi
+done < <(printf '%s\n' "$joined" | tr '|;&' '\n')
 exit 0
