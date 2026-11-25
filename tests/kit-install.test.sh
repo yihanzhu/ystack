@@ -223,55 +223,6 @@ fi
 rm -r "$kit/skills/ystack-demo"
 run 0
 
-ln -s "$HOME" "$scratch/home-link"
-name='a kit and HOME reached through links match the install by real paths'
-if HOME=$scratch/home-link run_at 0 "$scratch/home-link/git/ystack/kit/install.sh" &&
-  [ ! -s "$scratch/out" ]; then
-  pass "$name"
-else
-  fail "$name"
-fi
-
-skills=$HOME/.claude/skills
-mkdir -p "$kit/skills/ystack-demo"
-printf '%s\n' '---' 'name: ystack-demo' '---' > "$kit/skills/ystack-demo/SKILL.md"
-run 0
-rm "$skills/ystack-demo"
-ln -s "$scratch/home-link/git/ystack/kit/skills/ystack-demo" "$skills/ystack-demo"
-ln -s "$scratch/home-link/git/ystack/kit/skills/ystack-gone" "$skills/ystack-gone"
-name='links from an older install through a linked folder are relinked or dropped'
-if run 1 --check && holds "$scratch/out" 'stale: old link ~/.claude/skills/ystack-demo' &&
-  holds "$scratch/out" 'stale: extra link ~/.claude/skills/ystack-gone' && run 0 &&
-  [ "$(readlink "$skills/ystack-demo")" = "$kit/skills/ystack-demo" ] &&
-  [ ! -L "$skills/ystack-gone" ] && run 0 --check; then
-  pass "$name"
-else
-  fail "$name"
-fi
-rm "$skills/ystack-demo"
-mkdir -p "$scratch/elsewhere/kit/skills/ystack-demo"
-ln -s "$scratch/elsewhere/kit/skills/ystack-demo" "$skills/ystack-demo"
-name='a link into another kit stays and stops the install'
-if run 2 && holds "$scratch/out" 'is not this kit' &&
-  [ "$(readlink "$skills/ystack-demo")" = "$scratch/elsewhere/kit/skills/ystack-demo" ]; then
-  pass "$name"
-else
-  fail "$name"
-fi
-rm "$skills/ystack-demo"
-newline_target=$scratch/home-link/git/ystack/kit/skills/ystack-demo$'\n'
-ln -s "$newline_target" "$skills/ystack-demo"
-name='a link whose target ends in a newline is not the kit'"'"'s, live skill or not'
-if run 2 && holds "$scratch/out" 'is not this kit' && rm -r "$kit/skills/ystack-demo" && run 0 &&
-  [ -L "$skills/ystack-demo" ] && [ "$(readlink -n "$skills/ystack-demo"; printf x)" = "${newline_target}x" ]; then
-  pass "$name"
-else
-  fail "$name"
-fi
-rm "$skills/ystack-demo"
-rm -rf "$kit/skills/ystack-demo"
-run 0
-
 rm "$claude"
 printf '%s\n' 'plain sibling' > "$HOME/dotfiles/notes"
 printf '%s\n' 'newline name' > "$HOME/dotfiles/notes"$'\n'

@@ -34,12 +34,7 @@ fail() {
   exit 2
 }
 
-# The kit path is resolved to its real folders, the way `git rev-parse` names it
-# when the post-merge hook runs the installer. Then every run writes the same
-# link targets and imports, whichever path started it.
 home_real=$(cd "$HOME" 2> /dev/null && pwd -P) || home_real=$HOME
-# Command substitution drops trailing newlines; such a path is not HOME.
-[ "$home_real" -ef "$HOME" ] || home_real=$HOME
 
 # Names a path as ~/... when it is under HOME, by HOME's given or real path.
 shown() {
@@ -51,6 +46,8 @@ shown() {
   esac
 }
 
+# The real path, the way `git rev-parse` names it when the post-merge hook runs
+# this script. Then every run writes the same link targets and imports.
 kit=$(cd "$(dirname "$0")" && pwd -P)
 work=$(mktemp -d) || exit 2
 temps=()
@@ -197,28 +194,8 @@ fi
 render "$claude_file" "$work/claude-block" "$work/claude-next"
 render "$codex_file" "$work/codex-block" "$work/codex-next"
 
-# Sets link_text to the exact target of link $1. A plain $(readlink) would drop
-# trailing newlines, which can be part of a file name.
-read_link() {
-  link_text=$(readlink -n "$1" && printf x) || return 1
-  link_text=${link_text%x}
-}
-
-# A kit link points at kit/skills/<its own name>. An older install may have named
-# the kit through a linked folder, so the parent folder is compared as a folder:
-# the skill folder itself may be gone. Sets link_text.
-is_kit_link() {
-  [ -L "$1" ] || return 1
-  read_link "$1" || return 1
-  case $link_text in
-    "$kit/skills/$2") return 0 ;;
-    /*/"$2") [ "${link_text%/*}" -ef "$kit/skills" ] ;;
-    *) return 1 ;;
-  esac
-}
-
-# Plans the skill links. A kit link spelled another way is relinked or dropped.
-# Two destination names for one folder count once.
+# Plans the skill links. A kit link is one whose target is exactly
+# kit/skills/<its own name>. Two destination names for one folder count once.
 dests=("$HOME/.claude/skills")
 if [ -d "$HOME/.claude/skills" ] && [ -d "$HOME/.agents/skills" ] &&
   [ "$HOME/.claude/skills" -ef "$HOME/.agents/skills" ]; then
@@ -228,23 +205,20 @@ else
 fi
 adds=()
 drops=()
-relinks=()
 for dest in "${dests[@]}"; do
   if [ -d "$dest" ]; then
     for link in "$dest"/*; do
       [ -L "$link" ] || continue
-      name=${link##*/}
-      is_kit_link "$link" "$name" || continue
+      name=$(basename "$link")
+      [ "$(readlink "$link")" = "$kit/skills/$name" ] || continue
       [ -f "$kit/skills/$name/SKILL.md" ] || drops+=("$link")
     done
   fi
   for skill in "$kit"/skills/*/; do
-    name=${skill%/}
-    name=${name##*/}
+    name=$(basename "$skill")
     [ -f "$kit/skills/$name/SKILL.md" ] || continue
     link=$dest/$name
-    if is_kit_link "$link" "$name"; then
-      [ "$link_text" = "$kit/skills/$name" ] || relinks+=("$link")
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$kit/skills/$name" ]; then
       continue
     fi
     if [ -e "$link" ] || [ -L "$link" ]; then
@@ -274,10 +248,6 @@ if $check; then
   done
   for path in ${drops[@]+"${drops[@]}"}; do
     echo "stale: extra link $(shown "$path")"
-    stale=1
-  done
-  for path in ${relinks[@]+"${relinks[@]}"}; do
-    echo "stale: old link $(shown "$path")"
     stale=1
   done
   for path in ${parked[@]+"${parked[@]}"}; do
@@ -312,26 +282,18 @@ if [ -n "$codex_tmp" ]; then
 fi
 
 for path in ${adds[@]+"${adds[@]}"}; do
-  name=${path##*/}
+  name=$(basename "$path")
   [ ! -e "$path" ] && [ ! -L "$path" ] || fail "$(shown "$path") appeared while installing. Run again."
   mkdir -p "$(dirname "$path")"
-  # Naming the parent folder makes ln fail if anything appeared at $path
-  # meanwhile, instead of writing a link inside it.
-  ln -s "$kit/skills/$name" "${path%/*}/"
+  ln -s "$kit/skills/$name" "$path"
   echo "linked: $(shown "$path")"
 done
 for path in ${drops[@]+"${drops[@]}"}; do
-  name=${path##*/}
-  is_kit_link "$path" "$name" || fail "$(shown "$path") changed while installing. Run again."
+  name=$(basename "$path")
+  [ -L "$path" ] && [ "$(readlink "$path")" = "$kit/skills/$name" ] ||
+    fail "$(shown "$path") changed while installing. Run again."
   rm -- "$path"
   echo "removed: $(shown "$path")"
-done
-for path in ${relinks[@]+"${relinks[@]}"}; do
-  name=${path##*/}
-  is_kit_link "$path" "$name" || fail "$(shown "$path") changed while installing. Run again."
-  rm -- "$path"
-  ln -s "$kit/skills/$name" "${path%/*}/"
-  echo "relinked: $(shown "$path")"
 done
 for path in ${parked[@]+"${parked[@]}"}; do
   is_parked_command "$path" || fail "$(shown "$path") changed while installing. Run again."
