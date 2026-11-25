@@ -18,11 +18,11 @@ expect() {
 }
 
 bash_call() {
-  jq -cn --arg command "$1" '{tool_input: {command: $command}}'
+  jq -cn --arg command "$1" '{tool_name: "Bash", tool_input: {command: $command}}'
 }
 
 fetch_call() {
-  jq -cn --arg url "$1" '{tool_input: {url: $url, prompt: "summarize"}}'
+  jq -cn --arg url "$1" '{tool_name: "WebFetch", tool_input: {url: $url, prompt: "summarize"}}'
 }
 
 expect 'plain command' 0 "$(bash_call 'git status')"
@@ -35,7 +35,12 @@ expect 'comment on an issue' 0 "$(bash_call 'gh issue comment 5 --body done')"
 expect 'API object filtered' 0 "$(bash_call 'gh api repos/o/r/pulls/841 --jq .head.sha')"
 expect 'API checks' 0 "$(bash_call 'gh api repos/o/r/commits/abc/check-runs --jq .total_count')"
 expect 'other web page' 0 "$(fetch_call 'https://docs.github.com/en/rest')"
-expect 'no fields' 0 '{"tool_input":{}}'
+expect 'multi-line command with a plain last line' 0 "$(bash_call $'gh pr view 841 --json state\ngit status')"
+expect 'API PR list filtered' 0 "$(bash_call "gh api repos/o/r/pulls --jq '.[].number'")"
+expect 'API issue search count' 0 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq .total_count")"
+expect 'API PR files filtered' 0 "$(bash_call "gh api repos/o/r/pulls/841/files --jq '.[].filename'")"
+state_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequest(number: 1) { state } } }"'
+expect 'GraphQL state only' 0 "$(bash_call "$state_query")"
 
 expect 'plain issue view' 2 "$(bash_call 'gh issue view 12')"
 expect 'plain PR view' 2 "$(bash_call 'gh pr view 841')"
@@ -56,6 +61,19 @@ expect 'GraphQL body' 2 "$(bash_call "$graphql_cmd")"
 expect 'issue page' 2 "$(fetch_call 'https://github.com/o/r/issues/12')"
 expect 'PR page' 2 "$(fetch_call 'https://github.com/o/r/pull/841#issuecomment-1')"
 expect 'input that is not JSON' 2 'not json'
+expect 'multi-line command with a PR view last' 2 "$(bash_call $'echo start\ngh pr view 841')"
+expect 'API issue list' 2 "$(bash_call 'gh api repos/o/r/issues')"
+expect 'API PR list with a query' 2 "$(bash_call "gh api 'repos/o/r/pulls?state=open'")"
+expect 'API issue search' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r'")"
+expect 'API PR list filtered to bodies' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[].body'")"
+comments_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { issue(number: 1) { comments(first: 5) { nodes { author { login } } } } } }"'
+expect 'GraphQL comments' 2 "$(bash_call "$comments_query")"
+title_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequests(first: 5) { nodes { title } } } }"'
+expect 'GraphQL titles' 2 "$(bash_call "$title_query")"
+expect 'Bash call with no command' 2 '{"tool_name":"Bash","tool_input":{"command":""}}'
+expect 'WebFetch call with no URL' 2 '{"tool_name":"WebFetch","tool_input":{"url":""}}'
+expect 'no tool name and no fields' 2 '{"tool_input":{}}'
+expect 'truncated JSON' 2 '{"tool_name":"Bash","tool_input":{"command":"git st'
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"

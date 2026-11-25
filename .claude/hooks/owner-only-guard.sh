@@ -10,20 +10,38 @@ block() {
   exit 2
 }
 
+fail() {
+  echo "Blocked by ystack guard: $1" >&2
+  exit 2
+}
+
+# One line each for the tool name and the URL, then the command, which may hold
+# line breaks, then a last line "." so that no line break is lost.
 if IFS= read -r -d '' input || ! fields=$(
   set -o pipefail
-  printf '%s' "$input" | jq -r '[.tool_input.command // "", .tool_input.url // ""] | map(gsub("\u0000"; "")) | .[]' 2>/dev/null
+  printf '%s' "$input" | jq -r '
+    (.tool_name // ""), (.tool_input.url // "" | gsub("\n"; " ")),
+    (.tool_input.command // ""), "." | gsub("\u0000"; "")' 2>/dev/null
 ); then
-  echo "Blocked by ystack guard: the hook could not read its input." >&2
-  exit 2
+  fail "the hook could not read its input."
 fi
-cmd=${fields%$'\n'*}
-url=${fields##*$'\n'}
+tool=${fields%%$'\n'*}
+rest=${fields#*$'\n'}
+url=${rest%%$'\n'*}
+rest=${rest#*$'\n'}
+cmd=${rest%$'\n.'}
+
+case $tool in
+  Bash) [ -n "$cmd" ] || fail "the hook got no command." ;;
+  WebFetch) [ -n "$url" ] || fail "the hook got no URL." ;;
+  *) [ -n "$cmd$url" ] || fail "the hook got no command and no URL." ;;
+esac
 
 if printf '%s' "$url" | grep -Eiq '^https?://(www\.)?github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+'; then
   block "this page holds issue or PR text from any account."
 fi
-[ -n "$cmd" ] || exit 0
+# Every rule below needs `gh` and a space, so other commands pass at once.
+[[ $cmd =~ gh[[:space:]] ]] || exit 0
 
 # JSON fields of gh issue, gh pr and gh search that hold text from any account.
 text_fields='(^|[^A-Za-z])(body|comments|reviews|latestReviews)([^A-Za-z]|$)'
@@ -45,14 +63,16 @@ while IFS= read -r part; do
     if printf '%s' "$part" | grep -Eq '/(comments|reviews|timeline|events)([^A-Za-z]|$)'; then
       block "this endpoint returns comments or reviews."
     fi
-    if printf '%s' "$part" | grep -Eq '(issues|pulls)/[0-9]+([^0-9/]|$)'; then
+    # One issue or PR, a list of them, or an issue search.
+    if printf '%s' "$part" | grep -Eq "(issues|pulls)/[0-9]+([^0-9/]|\$)|(^|[/[:space:]\"'])(issues|pulls)([?[:space:]\"']|\$)|search/issues"; then
       if ! printf '%s' "$part" | grep -Eq -- '(--jq|-q)[[:space:]=]' ||
         printf '%s' "$part" | grep -Eq 'body|title'; then
-        block "the issue or PR object holds its body; filter it with --jq."
+        block "issue and PR objects hold their body and title; filter them with --jq."
       fi
     fi
-    if printf '%s' "$part" | grep -Eq 'graphql' && printf '%s' "$part" | grep -Eq 'body'; then
-      block "this query reads body text."
+    if printf '%s' "$part" | grep -Eq 'graphql' &&
+      printf '%s' "$part" | grep -Eiq 'body|title|comment|review|timeline'; then
+      block "this query reads text from any account."
     fi
   fi
 done < <(printf '%s\n' "$cmd" | tr ';|&' '\n')
