@@ -58,13 +58,19 @@ jobs:
   # Runs code from the PR, and prints source lines, only after the guard passed.
   checks:
     needs: guard
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # CI pins shellcheck for Linux only, so only that leg runs it.
       - name: Install shellcheck
+        if: runner.os == 'Linux'
         env:
           SHELLCHECK_VERSION: "0.11.0"
           # Release-asset digest of the linux.x86_64 tar.xz. Check it before installing.
@@ -78,10 +84,16 @@ jobs:
           sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
       - name: Checks
-        run: scripts/check.sh --skip-tree
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            scripts/check.sh --skip-tree
+          else
+            scripts/check.sh --skip-tree --skip-shellcheck
+          fi
 
   # The main ruleset requires this job by its name, `ci`. A skipped job would
-  # count as passing, so this one always runs and checks both results.
+  # count as passing, so this one always runs and checks both results. For the
+  # matrix, `needs.checks.result` is success only when every leg succeeded.
   ci:
     needs: [guard, checks]
     if: always()

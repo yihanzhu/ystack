@@ -1,8 +1,9 @@
 #!/bin/bash
 # Runs every check in this repo. It runs them all, then exits 1 if any failed.
 #
-#   scripts/check.sh              all checks
-#   scripts/check.sh --skip-tree  all but the tree scan, for the CI checks job
+#   scripts/check.sh                    all checks
+#   scripts/check.sh --skip-tree        all but the tree scan, for the CI checks job
+#   scripts/check.sh --skip-shellcheck  all but shellcheck, for CI's macOS leg
 #
 # CI's guard job scans the tree with the base commit's scanner and the term
 # secret, so the checks job skips that scan and never sees the term list.
@@ -12,12 +13,14 @@ set -uo pipefail
 shellcheck_version=0.11.0
 
 skip_tree=false
-[ $# -le 1 ] || { echo "usage: scripts/check.sh [--skip-tree]" >&2; exit 2; }
-case ${1:-} in
-  '') ;;
-  --skip-tree) skip_tree=true ;;
-  *) echo "usage: scripts/check.sh [--skip-tree]" >&2; exit 2 ;;
-esac
+skip_shellcheck=false
+for arg; do
+  case $arg in
+    --skip-tree) skip_tree=true ;;
+    --skip-shellcheck) skip_shellcheck=true ;;
+    *) echo "usage: scripts/check.sh [--skip-tree] [--skip-shellcheck]" >&2; exit 2 ;;
+  esac
+done
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 2
 cd "$root" || exit 2
@@ -26,7 +29,9 @@ failed=()
 
 echo "== shellcheck"
 got=$(shellcheck --version 2> /dev/null | awk '/^version:/ { print $2 }')
-if [ "$got" != "$shellcheck_version" ]; then
+if $skip_shellcheck; then
+  echo "skipped"
+elif [ "$got" != "$shellcheck_version" ]; then
   echo "shellcheck ${got:-is missing}; this repo pins $shellcheck_version."
   failed+=("shellcheck version")
 elif ! git ls-files -z -- '*.sh' .githooks | xargs -0 -r shellcheck -x -S style; then
