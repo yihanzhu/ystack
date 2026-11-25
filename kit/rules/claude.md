@@ -7,7 +7,7 @@ section says.
 | Work | Model (alias) | Effort |
 | --- | --- | --- |
 | Coordination, architecture, diagnosis, independent review | Opus 5.5 (`opus`) | `high`; `xhigh` for critical safety or architecture decisions |
-| The hardest long-horizon problems, only when Opus 5.5 is not enough | Fable 5.1 (`fable`) | `high` |
+| The hardest long-horizon problems, only when Opus 5.5 is not enough | Fable 5.2 (`fable`) | `high` |
 | Implementation under a clear plan | Sonnet 5.5 (`sonnet`) | `medium` |
 | Small, isolated edits with clear acceptance checks | Sonnet 5.5 (`sonnet`) | `low` |
 | Extraction, classification, structured log summaries | Haiku 5.5 (`haiku`) | `low` |
@@ -28,8 +28,10 @@ initiative. The owner talks only to Claude.
   that can run in parallel.
 - Do not use Codex for questions, small edits, or work you can finish quickly.
 - Send work through the `codex:codex-rescue` agent. Put `--model` and `--effort` in each
-  request. Take them from the Codex routing table in [Codex](codex.md). Reviews and
-  diagnosis are read-only.
+  request. Take them from the Codex model routing in codex.md, which this file imports.
+  Reviews and diagnosis are read-only.
 - Do not let Codex review code that Codex wrote.
 - Tell the owner in one line when you send work to Codex. Report the model that the
   runtime reports.
+
+@codex.md

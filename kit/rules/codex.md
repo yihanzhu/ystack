@@ -1,7 +1,8 @@
 ## Codex model routing
 
-Use these defaults when Codex delegates work. Explicit user choices and project
-requirements take precedence. Do not call another provider to follow Claude routing.
+Codex uses these defaults when it delegates work. Claude Code uses the same table for
+the model and effort it sends to Codex. Explicit user choices and project requirements
+take precedence. Codex does not call another provider to follow Claude routing.
 
 | Work | Model | Reasoning effort |
 | --- | --- | --- |
