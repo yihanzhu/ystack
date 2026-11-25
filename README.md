@@ -23,7 +23,7 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `kit/install.sh` | Installs the kit on this machine. Safe to run again. |
 | `ROADMAP.md` | The order of work. |
 | `AGENTS.md` | Rules and checks for agents in this repo. `CLAUDE.md` imports it. |
-| `.claude/hooks/no-merge-guard.sh` | Blocks Claude Code from merging PRs and pushing to `main`. |
+| `.claude/hooks/no-merge-guard.sh` | Blocks Claude Code from merging PRs, pushing to `main`, and changing rulesets, branch protection or the default branch. |
 | `.claude/hooks/owner-only-guard.sh` | Blocks Claude Code from reading issue and PR text directly. |
 | `scripts/gh-read.sh` | Reads an issue or PR and hides text from accounts other than the owner's. |
 | `scripts/check-public.sh` | Blocks the owner's blocked terms, secrets and machine-specific values. The term list is never committed. |
