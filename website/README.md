@@ -12,8 +12,6 @@ only what [`NORTH_STAR.md`](../NORTH_STAR.md) and [`ROADMAP.md`](../ROADMAP.md) 
 | `styles.css` | All styling — warm-ember theme. |
 | `favicon.svg` | Brand mark (anvil) used as the tab icon. |
 | `og.png` | 1200×630 social preview card. Wired as `og:image`/`twitter:image`. |
-| `robots.txt` | Allows crawlers; points at the sitemap. |
-| `sitemap.xml` | Single-URL sitemap. |
 
 No build step, no dependencies, no JS framework. The only external dependency is
 Google Fonts (Fraunces + Inter), and the page degrades to system fonts if it fails

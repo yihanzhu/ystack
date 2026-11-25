@@ -1,94 +1,23 @@
 # Roadmap
 
 This is the order of work toward [NORTH_STAR.md](NORTH_STAR.md). Each step is one
-or a few small PRs. Each PR has one concern. The owner merges every PR, and a
-relayed approval does not count.
+or a few small PRs. Each PR has one concern.
 
-| Step | Work | Needs |
-| --- | --- | --- |
-| 1 | New purpose | — |
-| 2 | Park the run-anywhere work | 1 |
-| 3 | Guard: blocked terms and secrets | 1 |
-| 4 | Guard: only the owner's text is an instruction | 1 |
-| 5 | Guard: no machine-specific configuration | 3 |
-| 6 | Move the kit from ymemory | 3, 4, 5 |
-| 7 | Rewire installation | 6 |
-| 8 | Write down the layer pass | 6 |
-| 9 | Site merge gate | the site's repository can enforce a ruleset |
-| 10 | ystack's own layer pass | 2, 8 |
-| 11 | A second codebase | 8 |
+## Done
 
-## 1. New purpose
+1. New purpose: `NORTH_STAR.md` and this file (#840).
+2. Park the run-anywhere work at the tag `archive/run-anywhere` (#841).
+3. Guard: blocked terms and secrets (#842, #843).
+4. Guard: only the owner's text is an instruction (#844).
+5. Guard: no machine-specific configuration (#845).
+6. Move the kit from ymemory: rules and skills (#846, #847).
+7. Rewire installation: `kit/install.sh` for Claude Code and Codex (#846).
+8. Write down the layer pass: `kit/skills/ystack-layer-pass` (#849).
 
-NORTH_STAR.md and this file state the new purpose. README.md points to them.
+## Owner to-do
 
-## 2. Park the run-anywhere work
-
-- Tag the last main commit before the new purpose as `archive/run-anywhere`.
-- Remove from main the inactive components, their tests, docs and workflows, and
-  the old artifacts under `work/`. Git history and the tag keep all of it.
-- End the construction-mode record, the Roadmap program authorization and
-  operator decision OD-1 (#275). No agent merges. The merge-guard hook blocks
-  every agent merge again.
-- Rewrite README.md and AGENTS.md for the new purpose. Cut CI down to the checks
-  that remain.
-- Close or fold in the open PRs and issues as the owner decides. Their branches
-  stay.
-
-## 3. Guard: blocked terms and secrets
-
-- One script checks staged changes before each commit. In CI it checks the whole
-  tree, the PR's commit messages, and the PR title and body. It fails on a blocked
-  term or a secret.
-- The term list is never committed. Locally it comes from a private file outside
-  the repo. In CI it comes from an Actions secret. A missing list fails the check.
-- The check prints only the file and line number. It never prints the term or the
-  matching line, because CI logs are public.
-- Secrets are found with a pinned, checksum-verified secret scanner.
-- The owner turns on GitHub secret scanning and push protection.
-
-## 4. Guard: only the owner's text is an instruction
-
-- One read script returns an issue or PR with its comments. Text from the owner's
-  account is marked as instructions. Text from any other author is fenced as data.
-  The script fails if it cannot tell who wrote a piece of text.
-- A Claude Code hook blocks direct reads of issue, PR and comment text and points
-  to the script. Codex has no such hook; its written rule points to the same script.
-- Remove the unused `@claude` workflow. It reads whole threads, including other
-  people's comments.
-- The owner sets interaction limits on the repository.
-
-## 5. Guard: no machine-specific configuration
-
-- The step-3 check also blocks home-directory paths, host names from the
-  private list, and agent permission allow and deny lists.
-- The kit uses `$HOME` and parameters instead of machine values.
-
-## 6. Move the kit from ymemory
-
-- `kit/rules/`: working preferences and model routing for Claude Code and Codex.
-  ymemory imports them from here. The "About the owner" block stays in ymemory.
-- `kit/skills/`: development skills. They lose run records, session IDs and
-  private links before they move. They change here only through PRs. ymemory's
-  nightly distill only proposes skill candidates to the ymemory inbox. It never
-  writes here.
-- Employer names are removed. Two work-related knowledge pages stay in ymemory.
-- The distill and capture engine stays in ymemory.
-
-## 7. Rewire installation
-
-- `kit/install.sh` makes Claude Code and Codex load the rules and skills from this
-  repo. It can run again safely. It writes no machine values into the repo.
-- ymemory's installer stops installing these pieces and imports them from here.
-- A work computer runs only this installer.
-
-## 8. Write down the layer pass
-
-- A kit skill holds the five questions, where to find evidence for each, the
-  format of a finding, and the rule for which changes may merge without the owner.
-- It starts from the template of the site pass. One lesson from that pass: if a
-  PR's own code decides its kind of change, the rule is not a gate. The decision
-  must come from merged code, and an unknown kind goes to the owner.
+- Confirm that every machine with the kit ran `kit/install.sh` after #846. Then
+  the removal of the parked yshifu command can leave `kit/install.sh` and its tests.
 
 ## 9. Site merge gate
 

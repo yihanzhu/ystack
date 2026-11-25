@@ -31,7 +31,6 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `.githooks/` | Runs the public-repo check before each commit, and refreshes the kit after each pull. |
 | `tests/` | Tests for the checks. |
 | `.github/workflows/ci.yml` | The `ci` check that `main` requires. |
-| `.github/workflows/tripwire.yml` | Fails when anyone but the owner lands a commit on `main`. |
 | `website/` | The landing page at ystack.yihanzhu.com. |
 
 ## Install the kit
@@ -49,8 +48,4 @@ A work computer installs only this repo.
 
 ## Earlier work
 
-From June to November 2026, ystack was an autonomous coding team and then a
-portable control plane meant to run on any agent harness and any Git forge.
-688 PRs merged, almost all of them into ystack itself. That work stopped on
-2026-11-23. The tag `archive/run-anywhere` keeps its last state, and Git keeps
-its full history.
+Earlier work is parked at the tag `archive/run-anywhere`. See [`NORTH_STAR.md`](NORTH_STAR.md).
