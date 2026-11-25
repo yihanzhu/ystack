@@ -19,12 +19,12 @@ if IFS= read -r -d '' input || ! cmd=$(
 fi
 [ -n "$cmd" ] || block "the hook got no command."
 
-# Backslash line breaks are removed. grep reads line by line, so each line of
-# `joined` is one command line.
-joined=${cmd//$'\\\n'/ }
+# Backslash line breaks are removed, as bash removes them. grep reads line by
+# line, so each line of `joined` is one command line.
+joined=${cmd//$'\\\n'/}
 
-# Flags with an optional value, as in `-R o/r`, `--repo=o/r` or `-C dir`.
-flags='([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]|;&][^[:space:]|;&]*)?)*'
+# Flags with an optional value, as in `-R o/r`, `--repo=o/r` or `-C "a dir"`.
+flags="([[:space:]]+-[^[:space:]]*([[:space:]]+(\"[^\"]*\"|'[^']*'|[^-[:space:]|;&\"'][^[:space:]|;&]*))?)*"
 merge_msg="this session may not merge PRs. The session that wrote a PR never merges it."
 gate_msg="this session may not change rulesets or branch protection."
 
@@ -39,13 +39,17 @@ fi
 if printf '%s' "$cmd" | grep -Eq 'pulls/[^/[:space:]]+/merge|mergePullRequest|enablePullRequestAutoMerge'; then
   block "$merge_msg"
 fi
-if printf '%s' "$cmd" | grep -Eq '(create|update|delete)(RepositoryRuleset|BranchProtectionRule)'; then
+if printf '%s' "$cmd" | grep -q graphql &&
+  printf '%s' "$cmd" | grep -Eq '(create|update|delete)(RepositoryRuleset|BranchProtectionRule)'; then
   block "$gate_msg"
 fi
 
 # REST writes to the gate, read one command at a time: the parts between |, ;, &
-# and line breaks. The flag is case-sensitive (`grep -x` is not `-X`); the
-# method is not.
+# and line breaks. Redirections such as 2>&1 are not command breaks. The flag is
+# case-sensitive (`grep -x` is not `-X`); the method is not.
+parts=${joined//&>/>}
+parts=${parts//>&/>}
+parts=${parts//<&/<}
 method_flag='(^|[[:space:]])(-X|--method|--request)'
 write_method="${method_flag}[[:space:]=]*[\"']?([Pp][Uu][Tt]|[Pp][Aa][Tt][Cc][Hh]|[Pp][Oo][Ss][Tt]|[Dd][Ee][Ll][Ee][Tt][Ee])"
 while IFS= read -r part; do
@@ -59,5 +63,5 @@ while IFS= read -r part; do
     printf '%s' "$part" | grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)'; then
     block "$gate_msg"
   fi
-done < <(printf '%s\n' "$joined" | tr '|;&' '\n')
+done < <(printf '%s\n' "$parts" | tr '|;&' '\n')
 exit 0
