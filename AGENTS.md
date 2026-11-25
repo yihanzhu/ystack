@@ -30,16 +30,12 @@ for the order of work. This repo is public.
 ## Checks
 
 ```bash
-git ls-files -z '*.sh' | xargs -0 -r shellcheck -x -S style
-bash tests/no-merge-guard.test.sh
-bash tests/check-public.test.sh
-bash tests/owner-only-guard.test.sh
-bash tests/gh-read.test.sh
-bash tests/kit-install.test.sh
-scripts/check-public.sh tree
+scripts/check.sh
 ```
 
-CI pins shellcheck 0.11.0. Use the same version locally.
+It runs shellcheck, every test in `tests/` and the public-repo tree scan, and
+fails if any of them fails. It also fails when the local shellcheck is not the
+version CI pins. CI runs it too; only CI scans the PR's commits and text.
 
 Set up each machine once:
 
