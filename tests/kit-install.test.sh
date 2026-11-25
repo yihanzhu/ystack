@@ -5,6 +5,9 @@ set -u
 root=$(git rev-parse --show-toplevel) || exit 1
 scratch=$(mktemp -d) || exit 1
 [ -n "$scratch" ] && [ -d "$scratch" ] || exit 1
+# The installer names the kit by its real path. On macOS the temporary folder is
+# reached through a link, so the expected paths here use the real one too.
+scratch=$(cd "$scratch" && pwd -P) || exit 1
 trap 'rm -rf "$scratch"' EXIT
 failures=0
 
@@ -219,6 +222,15 @@ else
 fi
 rm -r "$kit/skills/ystack-demo"
 run 0
+
+ln -s "$HOME" "$scratch/home-link"
+name='a kit and HOME reached through links match the install by real paths'
+if HOME=$scratch/home-link run_at 0 "$scratch/home-link/git/ystack/kit/install.sh" &&
+  [ ! -s "$scratch/out" ]; then
+  pass "$name"
+else
+  fail "$name"
+fi
 
 rm "$claude"
 printf '%s\n' 'plain sibling' > "$HOME/dotfiles/notes"
