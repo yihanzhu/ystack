@@ -43,7 +43,7 @@ esac
 
 # Addresses that return issue, PR, review or comment text from any account.
 api_text="api\\.github\\.com/(repos/[^/[:space:]]+/[^/[:space:]]+/(issues|pulls)([/?#[:space:]\"']|\$)|search/issues|graphql|[^[:space:]\"']*/(comments|reviews|timeline)([/?#[:space:]\"']|\$))"
-page_text="github\\.com/[^/[:space:]]+/[^/[:space:]]+/(issues|pull|pulls|discussions)([/?#[:space:]\"']|\$)"
+page_text="(^|[^.A-Za-z0-9-])(www\\.)?github\\.com/[^/[:space:]]+/[^/[:space:]]+/(issues|pull|pulls|discussions)([/?#[:space:]\"']|\$)"
 url_msg="this address returns issue, PR, review or comment text from any account."
 
 shopt -s nocasematch
@@ -60,7 +60,7 @@ shopt -u nocasematch
 # GraphQL fields that hold text. A query may span lines or sit in a variable,
 # so the whole command is read.
 gh_api='gh[[:space:]]+api'
-graphql_text='(^|[^A-Za-z0-9_])(body|title)[A-Za-z]*([^A-Za-z0-9_]|$)|userContentEdits'
+graphql_text='[Bb]ody|[Tt]itle|userContentEdits'
 if [[ $cmd == *graphql* ]] && [[ $cmd =~ $gh_api ]] && [[ $cmd =~ $graphql_text ]]; then
   block "this query reads text from any account."
 fi
@@ -74,8 +74,6 @@ text_endpoint='/(comments|reviews|timeline|events)([^A-Za-z]|$)'
 # One issue or PR, a list of them (of a repository, an organization, the user,
 # or all), or an issue search. A repository named issues is not a list.
 item_path="(issues|pulls)/[0-9]+([^0-9/]|\$)|(repos/[^/[:space:]]+/[^/[:space:]]+/|orgs/[^/[:space:]]+/|user/|[[:space:]\"']/?)(issues|pulls)([?[:space:]\"']|\$)|search/issues"
-template_re='(^|[[:space:]])(-t|--template)([[:space:]=]|$)'
-filter_re="(^|[[:space:]])(--jq|-q)([[:space:]]+|=)('[^']*'|\"([^\"\\\\]|\\\\.)*\"|[^[:space:]]+)"
 filter_msg="a --jq filter on issues or PRs may name only these fields: number, state, id, node_id, html_url, url, draft, merged, merged_at, created_at, updated_at, closed_at, total_count, user.login, author.login, labels[].name, head.sha, head.ref, base.ref, mergeable, mergeable_state."
 
 # The safe-field check for a jq filter.
@@ -83,7 +81,9 @@ safe_leaf='^(number|state|id|node_id|html_url|url|draft|merged|merged_at|created
 safe_path='^(items\.)?(number|state|id|node_id|html_url|url|draft|merged|merged_at|created_at|updated_at|closed_at|total_count|user\.login|author\.login|labels\.name|head\.sha|head\.ref|base\.ref|mergeable|mergeable_state)$'
 reduce_words='^(length|keys)$'
 pass_words='^(join|tostring|tonumber|sort|unique|reverse|first|last|add|min|max|tojson|ascii_downcase)$'
-other_words='^(map|sort_by|unique_by|group_by|min_by|max_by|not|and|or|true|false|null|select|limit|any|all|empty|test|startswith|endswith|contains|index)$'
+# These return their input objects whole, whatever field they look at.
+whole_words='^(select|sort_by|unique_by|group_by|min_by|max_by|limit)$'
+other_words='^(map|not|and|or|true|false|null|any|all|empty|test|startswith|endswith|contains|index)$'
 str_re='"([^"\\]|\\.)*"'
 path_re='\.([A-Za-z_][A-Za-z0-9_]*)?(\[[0-9:]*\]|\.[A-Za-z_][A-Za-z0-9_]*|\?)*'
 word_re='([A-Za-z_][A-Za-z0-9_]*)([[:space:]]*:)?'
@@ -105,7 +105,7 @@ safe_filter() {
       updated_at | closed_at | total_count | user.login | author.login | 'labels[].name' | \
       head.sha | head.ref | base.ref | mergeable | mergeable_state) return 0 ;;
   esac
-  [[ $f == *'$'* || $f == *'\('* ]] && return 1
+  [[ $f == *'$'* || $f == *'\('* || $f == *'`'* ]] && return 1
   s=$f
   while [[ $s =~ $str_re ]]; do s=${s/"${BASH_REMATCH[0]}"/ }; done
   [[ $s == *'"'* ]] && return 1
@@ -155,9 +155,10 @@ safe_filter() {
         has_reduce=true
       elif [[ $word =~ $pass_words ]]; then
         :
+      elif [[ $word =~ $whole_words ]]; then
+        has_select=true
       elif [[ $word =~ $other_words ]]; then
         has_other=true
-        [ "$word" = select ] && has_select=true
       else
         return 1
       fi
@@ -181,21 +182,58 @@ safe_filter() {
   $out_found
 }
 
+nofilter_msg="issue and PR objects hold their body and title; filter them with --jq on safe fields."
+template_msg="a --template can print the body and title."
+shell_word="^[[:space:]]*((\"([^\"\\\\]|\\\\.)*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\])+)"
+
+# Checks the jq filter of a value $1 as gh receives it. A value with quotes or
+# escapes that is not one plain quoted string fails closed.
+check_value() {
+  local v=$1
+  case $v in
+    \'*\') v=${v:1:${#v}-2} ;;
+    \"*\") v=${v:1:${#v}-2}; v=${v//\\\"/\"} ;;
+  esac
+  [[ $v == *[\'\\]* ]] && block "$filter_msg"
+  [[ $1 != \"*\" && $v == *\"* ]] && block "$filter_msg"
+  safe_filter "$v" || block "$filter_msg"
+}
+
+# The part is split into shell words, so text inside a quoted argument is never
+# taken as an option. Without quotes or escapes, whitespace splits it exactly.
 check_filters() {
-  local part=$1 rest=$1 found=false f
-  [[ $part == *-t* ]] && [[ $part =~ $template_re ]] && block "a --template can print the body and title."
-  [[ $part == *-q* || $part == *--jq* ]] || rest=''
-  while [ -n "$rest" ] && [[ $rest =~ $filter_re ]]; do
-    found=true
-    f=${BASH_REMATCH[4]}
-    rest=${rest#*"${BASH_REMATCH[0]}"}
-    case $f in
-      \'*\') f=${f:1:${#f}-2} ;;
-      \"*\") f=${f:1:${#f}-2}; f=${f//\\\"/\"} ;;
+  local part=$1 rest=$1 w value_next=false found=false
+  local -a words
+  if [[ $part != *[\"\'\\]* ]]; then
+    [[ $part == *-q* || $part == *--jq* ]] || block "$nofilter_msg"
+    set -f
+    # This part has no quotes or escapes; whitespace splits it as the shell does.
+    # shellcheck disable=SC2086
+    set -- $part
+    set +f
+  else
+    while [[ $rest =~ $shell_word ]]; do
+      words[${#words[@]}]=${BASH_REMATCH[1]}
+      rest=${rest:${#BASH_REMATCH[0]}}
+    done
+    [[ $rest == *[![:space:]]* ]] && block "$nofilter_msg"
+    set -- "${words[@]}"
+  fi
+  for w; do
+    if $value_next; then
+      check_value "$w"
+      value_next=false
+      continue
+    fi
+    case $w in
+      -t | -t?* | --template | --template=*) block "$template_msg" ;;
+      --jq | -q | -[A-Za-z]*q) found=true; value_next=true ;;
+      --jq=*) found=true; check_value "${w#--jq=}" ;;
+      -q?*) found=true; w=${w#-q}; check_value "${w#=}" ;;
     esac
-    safe_filter "$f" || block "$filter_msg"
   done
-  $found || block "issue and PR objects hold their body and title; filter them with --jq on safe fields."
+  $value_next && block "$filter_msg"
+  $found || block "$nofilter_msg"
 }
 
 check_part() {
@@ -212,7 +250,7 @@ check_part() {
       block "plain 'gh issue view' and 'gh pr view' print the body."
     fi
   fi
-  if [[ $part == *gh* ]] && [[ $part =~ $gh_api ]]; then
+  if [[ $part == *gh[[:space:]]api* ]] || { [[ $part == *gh[[:space:]][[:space:]]* ]] && [[ $part =~ $gh_api ]]; }; then
     gh=true
     if [[ $part == *comments* || $part == *reviews* || $part == *timeline* || $part == *events* ]] &&
       [[ $part =~ $text_endpoint ]]; then
@@ -242,13 +280,22 @@ IFS=$'\n'
 lines=($cmd)
 IFS=$' \t\n'
 set +f
+previous=''
 for line in ${lines[@]+"${lines[@]}"}; do
   [[ $line == *gh[[:space:]]* || $line == *[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]* ]] || continue
+  # A line that just passed passes again.
+  [[ $line == "$previous" ]] && continue
+  previous=$line
   # Redirections such as 2>&1 are not command breaks.
   rest=${line//&>/>}
   rest=${rest//>&/>}
   rest=${rest//<&/<}
   while [ -n "$rest" ]; do
+    # Without separators, quotes or escapes, the rest is one part.
+    if [[ $rest != *[\|\;\&\"\'\\]* ]]; then
+      check_part "$rest"
+      break
+    fi
     [[ $rest =~ $part_re ]]
     part=${BASH_REMATCH[0]}
     check_part "$part"
