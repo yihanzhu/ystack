@@ -197,16 +197,22 @@ fi
 render "$claude_file" "$work/claude-block" "$work/claude-next"
 render "$codex_file" "$work/codex-block" "$work/codex-next"
 
+# Sets link_text to the exact target of link $1. A plain $(readlink) would drop
+# trailing newlines, which can be part of a file name.
+read_link() {
+  link_text=$(readlink -n "$1" && printf x) || return 1
+  link_text=${link_text%x}
+}
+
 # A kit link points at kit/skills/<its own name>. An older install may have named
 # the kit through a linked folder, so the parent folder is compared as a folder:
-# the skill folder itself may be gone.
+# the skill folder itself may be gone. Sets link_text.
 is_kit_link() {
-  local target
   [ -L "$1" ] || return 1
-  target=$(readlink "$1") || return 1
-  case $target in
+  read_link "$1" || return 1
+  case $link_text in
     "$kit/skills/$2") return 0 ;;
-    /*/"$2") [ "${target%/*}" -ef "$kit/skills" ] ;;
+    /*/"$2") [ "${link_text%/*}" -ef "$kit/skills" ] ;;
     *) return 1 ;;
   esac
 }
@@ -227,17 +233,18 @@ for dest in "${dests[@]}"; do
   if [ -d "$dest" ]; then
     for link in "$dest"/*; do
       [ -L "$link" ] || continue
-      name=$(basename "$link")
+      name=${link##*/}
       is_kit_link "$link" "$name" || continue
       [ -f "$kit/skills/$name/SKILL.md" ] || drops+=("$link")
     done
   fi
   for skill in "$kit"/skills/*/; do
-    name=$(basename "$skill")
+    name=${skill%/}
+    name=${name##*/}
     [ -f "$kit/skills/$name/SKILL.md" ] || continue
     link=$dest/$name
     if is_kit_link "$link" "$name"; then
-      [ "$(readlink "$link")" = "$kit/skills/$name" ] || relinks+=("$link")
+      [ "$link_text" = "$kit/skills/$name" ] || relinks+=("$link")
       continue
     fi
     if [ -e "$link" ] || [ -L "$link" ]; then
@@ -305,23 +312,25 @@ if [ -n "$codex_tmp" ]; then
 fi
 
 for path in ${adds[@]+"${adds[@]}"}; do
-  name=$(basename "$path")
+  name=${path##*/}
   [ ! -e "$path" ] && [ ! -L "$path" ] || fail "$(shown "$path") appeared while installing. Run again."
   mkdir -p "$(dirname "$path")"
-  ln -s "$kit/skills/$name" "$path"
+  # -n: a link to a folder that appeared here meanwhile fails the call, so ln
+  # never writes a link inside that folder.
+  ln -sn "$kit/skills/$name" "$path"
   echo "linked: $(shown "$path")"
 done
 for path in ${drops[@]+"${drops[@]}"}; do
-  name=$(basename "$path")
+  name=${path##*/}
   is_kit_link "$path" "$name" || fail "$(shown "$path") changed while installing. Run again."
   rm -- "$path"
   echo "removed: $(shown "$path")"
 done
 for path in ${relinks[@]+"${relinks[@]}"}; do
-  name=$(basename "$path")
+  name=${path##*/}
   is_kit_link "$path" "$name" || fail "$(shown "$path") changed while installing. Run again."
   rm -- "$path"
-  ln -s "$kit/skills/$name" "$path"
+  ln -sn "$kit/skills/$name" "$path"
   echo "relinked: $(shown "$path")"
 done
 for path in ${parked[@]+"${parked[@]}"}; do

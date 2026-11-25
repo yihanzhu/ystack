@@ -259,7 +259,17 @@ else
   fail "$name"
 fi
 rm "$skills/ystack-demo"
-rm -r "$kit/skills/ystack-demo"
+newline_target=$scratch/home-link/git/ystack/kit/skills/ystack-demo$'\n'
+ln -s "$newline_target" "$skills/ystack-demo"
+name='a link whose target ends in a newline is not the kit'"'"'s, live skill or not'
+if run 2 && holds "$scratch/out" 'is not this kit' && rm -r "$kit/skills/ystack-demo" && run 0 &&
+  [ -L "$skills/ystack-demo" ] && [ "$(readlink -n "$skills/ystack-demo"; printf x)" = "${newline_target}x" ]; then
+  pass "$name"
+else
+  fail "$name"
+fi
+rm "$skills/ystack-demo"
+rm -rf "$kit/skills/ystack-demo"
 run 0
 
 rm "$claude"
