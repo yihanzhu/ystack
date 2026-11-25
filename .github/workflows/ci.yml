@@ -63,6 +63,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # One output per leg. The matrix result alone can be success when a leg was
+    # cancelled before it ran, so the gate also needs both outputs.
+    outputs:
+      linux: ${{ steps.checks.outputs.linux }}
+      macos: ${{ steps.checks.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,16 +89,18 @@ jobs:
           sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
       - name: Checks
+        id: checks
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
             scripts/check.sh --skip-tree
+            echo "linux=success" >> "$GITHUB_OUTPUT"
           else
             scripts/check.sh --skip-tree --skip-shellcheck
+            echo "macos=success" >> "$GITHUB_OUTPUT"
           fi
 
   # The main ruleset requires this job by its name, `ci`. A skipped job would
-  # count as passing, so this one always runs and checks both results. For the
-  # matrix, `needs.checks.result` is success only when every leg succeeded.
+  # count as passing, so this one always runs and checks both results.
   ci:
     needs: [guard, checks]
     if: always()
@@ -103,7 +110,10 @@ jobs:
         env:
           GUARD: ${{ needs.guard.result }}
           CHECKS: ${{ needs.checks.result }}
+          LINUX: ${{ needs.checks.outputs.linux }}
+          MACOS: ${{ needs.checks.outputs.macos }}
         run: |
           echo "guard: $GUARD"
-          echo "checks: $CHECKS"
-          [ "$GUARD" = success ] && [ "$CHECKS" = success ]
+          echo "checks: $CHECKS (linux: ${LINUX:-none}, macos: ${MACOS:-none})"
+          [ "$GUARD" = success ] && [ "$CHECKS" = success ] &&
+            [ "$LINUX" = success ] && [ "$MACOS" = success ]
