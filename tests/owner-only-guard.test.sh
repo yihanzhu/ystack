@@ -61,6 +61,17 @@ expect 'API open PR numbers through select' 0 "$(bash_call "gh api repos/o/r/pul
 expect 'API PR numbers sorted, then printed' 0 "$(bash_call "gh api repos/o/r/pulls --jq 'sort_by(.number) | .[].number'")"
 expect 'API read of a repository named issues by address' 0 "$(fetch_call 'https://api.github.com/repos/acme/issues')"
 expect 'API PR with grouped -iq and a safe field' 0 "$(bash_call "gh api repos/o/r/pulls/1 -iq '.head.sha'")"
+# shellcheck disable=SC2016 # These agent commands hold literal $(...) and $VAR.
+{
+  expect 'safe read in a quoted substitution' 0 "$(bash_call 'sha="$(gh api repos/o/r/pulls/856 --jq .head.sha)"')"
+  expect 'safe read in a substitution with a quoted filter' 0 "$(bash_call "sha=\$(gh api repos/o/r/pulls/856 --jq '.head.sha')")"
+  expect 'safe read in echo' 0 "$(bash_call 'echo "$(gh api repos/o/r/pulls/856 --jq .head.sha)"')"
+  expect 'safe read in test' 0 "$(bash_call 'test "$(gh api repos/o/r/pulls/856 --jq .state)" = closed')"
+  expect 'PR files by a variable number, filtered' 0 "$(bash_call "gh api repos/o/r/pulls/\$n/files --jq '.[].filename'")"
+  expect 'PR by a variable number, safe filter' 0 "$(bash_call 'gh api repos/o/r/pulls/$n --jq .state')"
+  expect 'PR list of a variable repository, filtered' 0 "$(bash_call "gh api \"repos/\$REPO/pulls\" --jq '.[].number'")"
+  expect 'PRs of a commit, filtered' 0 "$(bash_call "gh api repos/o/r/commits/abc/pulls --jq '.[].number'")"
+}
 expect 'API issue search numbers' 0 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq '.items[].number'")"
 expect 'curl of check runs' 0 "$(bash_call 'curl -s https://api.github.com/repos/o/r/commits/abc/check-runs')"
 expect 'repository page' 0 "$(fetch_call 'https://github.com/o/r')"
@@ -109,6 +120,21 @@ expect 'API issue with the identity filter' 2 "$(bash_call 'gh api repos/o/r/iss
 expect 'API PR list with .[]' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[]'")"
 expect 'API issue search with .items' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq .items")"
 expect 'API PR with del' 2 "$(bash_call "gh api repos/o/r/pulls/1 -q 'del(.head)'")"
+# shellcheck disable=SC2016 # These agent commands hold literal $(...), backquotes and $VAR.
+{
+  expect 'body read in a quoted substitution' 2 "$(bash_call 'x="$(gh api repos/o/r/pulls/856 --jq .body)"')"
+  expect 'issue read in backquotes' 2 "$(bash_call 'x=`gh api repos/o/r/issues/1`')"
+  expect 'PR by a variable number' 2 "$(bash_call 'gh api repos/o/r/pulls/$n')"
+  expect 'issue by a braced variable number' 2 "$(bash_call 'gh api repos/o/r/issues/${n}')"
+  expect 'issue body by a quoted variable number' 2 "$(bash_call 'gh api "repos/o/r/issues/$n" --jq .body')"
+  expect 'PR bodies in a loop' 2 "$(bash_call 'for n in 850 851; do gh api repos/o/r/pulls/$n --jq .body; done')"
+  expect 'PR by a substituted number' 2 "$(bash_call 'gh api repos/o/r/pulls/$(gh pr view --json number -q .number)')"
+  expect 'issue list of a variable repository' 2 "$(bash_call 'gh api "repos/$REPO/issues"')"
+  expect 'PR list of the workflow repository' 2 "$(bash_call 'gh api repos/$GITHUB_REPOSITORY/pulls')"
+  expect 'PRs of a commit' 2 "$(bash_call 'gh api repos/o/r/commits/abc/pulls')"
+  expect 'PRs of a commit by curl' 2 "$(bash_call 'curl -s https://api.github.com/repos/o/r/commits/abc/pulls')"
+}
+expect 'PRs of a commit by address' 2 "$(fetch_call 'https://api.github.com/repos/o/r/commits/abc/pulls')"
 expect 'API PRs through sort_by' 2 "$(bash_call "gh api repos/o/r/pulls --jq 'sort_by(.number)'")"
 expect 'API PRs through group_by' 2 "$(bash_call "gh api repos/o/r/pulls --jq 'group_by(.state)'")"
 expect 'API PR with a safe filter, then an attached body filter' 2 "$(bash_call 'gh api repos/o/r/pulls/1 -q .number -q.body')"

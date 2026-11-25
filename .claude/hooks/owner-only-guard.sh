@@ -41,8 +41,11 @@ case $tool in
   *) [ -n "$cmd$url" ] || fail "the hook got no command and no URL." ;;
 esac
 
+# A repository in a path: owner and name, or one variable that holds both.
+repo="(\\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?|[^/[:space:]\"']+/[^/[:space:]\"']+)"
 # Addresses that return issue, PR, review or comment text from any account.
-api_text="api\\.github\\.com/(repos/[^/[:space:]]+/[^/[:space:]]+/(issues|pulls)([/?#[:space:]\"']|\$)|search/issues|graphql|[^[:space:]\"']*/(comments|reviews|timeline)([/?#[:space:]\"']|\$))"
+# A commit's pulls are full PR objects.
+api_text="api\\.github\\.com/(repos/$repo/((issues|pulls)|commits/[^/[:space:]\"']+/pulls)([/?#[:space:]\"']|\$)|search/issues|graphql|[^[:space:]\"']*/(comments|reviews|timeline)([/?#[:space:]\"']|\$))"
 page_text="(^|[^.A-Za-z0-9-])(www\\.)?github\\.com/[^/[:space:]]+/[^/[:space:]]+/(issues|pull|pulls|discussions)([/?#[:space:]\"']|\$)"
 url_msg="this address returns issue, PR, review or comment text from any account."
 
@@ -71,14 +74,19 @@ view_ok='--json|(^|[[:space:]])(-w|--web)([[:space:]]|$)'
 # JSON fields of gh issue, gh pr and gh search that hold text from any account.
 text_fields='(^|[^A-Za-z])(body|comments|reviews|latestReviews)([^A-Za-z]|$)'
 text_endpoint='/(comments|reviews|timeline|events)([^A-Za-z]|$)'
-# One issue or PR, a list of them (of a repository, an organization, the user,
-# or all), or an issue search. A repository named issues is not a list.
-item_path="(issues|pulls)/[0-9]+([^0-9/]|\$)|(repos/[^/[:space:]]+/[^/[:space:]]+/|orgs/[^/[:space:]]+/|user/|[[:space:]\"']/?)(issues|pulls)([?[:space:]\"']|\$)|search/issues"
-filter_msg="a --jq filter on issues or PRs may name only these fields: number, state, id, node_id, html_url, url, draft, merged, merged_at, created_at, updated_at, closed_at, total_count, user.login, author.login, labels[].name, head.sha, head.ref, base.ref, mergeable, mergeable_state."
+# One issue or PR (by number, or by a variable or substitution), a list of them
+# (of a repository, an organization, the user, all, or a commit), or an issue
+# search. A repository named issues is not a list. Sub-paths such as
+# pulls/$n/files are not items.
+item_one="(issues|pulls)/([0-9]+|\"?\\\$(\\{[^}]*\\}|[A-Za-z_][A-Za-z0-9_]*)\"?)([^A-Za-z0-9_/]|\$)"
+item_list="(repos/$repo/|orgs/[^/[:space:]]+/|user/|commits/[^/[:space:]\"']+/|[[:space:]\"']/?)(issues|pulls)([?[:space:]\"']|\$)|search/issues"
 
-# The safe-field check for a jq filter.
-safe_leaf='^(number|state|id|node_id|html_url|url|draft|merged|merged_at|created_at|updated_at|closed_at|total_count|mergeable|mergeable_state)$'
-safe_path='^(items\.)?(number|state|id|node_id|html_url|url|draft|merged|merged_at|created_at|updated_at|closed_at|total_count|user\.login|author\.login|labels\.name|head\.sha|head\.ref|base\.ref|mergeable|mergeable_state)$'
+# The only fields a --jq filter on issues or PRs may name. Other lists below
+# are made from this one.
+safe_fields='number state id node_id html_url url draft merged merged_at created_at updated_at closed_at total_count user.login author.login labels[].name head.sha head.ref base.ref mergeable mergeable_state'
+filter_msg="a --jq filter on issues or PRs may name only these fields: ${safe_fields// /, }."
+# Paths as safe_filter writes them, with [] removed, between spaces.
+safe_paths=" ${safe_fields//\[\]/} "
 reduce_words='^(length|keys)$'
 pass_words='^(join|tostring|tonumber|sort|unique|reverse|first|last|add|min|max|tojson|ascii_downcase)$'
 # These return their input objects whole, whatever field they look at.
@@ -95,16 +103,12 @@ safe_filter() {
   local f=$1 s stage tok norm word n i out_found=false
   local -a stages kinds
   # One safe path alone, such as .head.sha or .[].number, is the most common
-  # filter. A case list is much faster than a regex here.
+  # filter. A string test is much faster than a regex here.
   s=${f#.}
   s=${s#items}
   s=${s#\[\]}
   s=${s#.}
-  case $s in
-    number | state | id | node_id | html_url | url | draft | merged | merged_at | created_at | \
-      updated_at | closed_at | total_count | user.login | author.login | 'labels[].name' | \
-      head.sha | head.ref | base.ref | mergeable | mergeable_state) return 0 ;;
-  esac
+  [[ -n $s && " $safe_fields " == *" $s "* ]] && return 0
   [[ $f == *'$'* || $f == *'\('* || $f == *'`'* ]] && return 1
   s=$f
   while [[ $s =~ $str_re ]]; do s=${s/"${BASH_REMATCH[0]}"/ }; done
@@ -139,7 +143,7 @@ safe_filter() {
       norm=${norm%.}
       if [ -z "$norm" ] || { [ "$norm" = items ] && [[ $tok == *'['* ]]; }; then
         has_empty=true
-      elif [[ $norm =~ $safe_path ]]; then
+      elif [[ $safe_paths == *" ${norm#items.} "* ]]; then
         has_safe=true
       else
         return 1
@@ -149,7 +153,8 @@ safe_filter() {
       word=${BASH_REMATCH[1]}
       stage=${stage/"${BASH_REMATCH[0]}"/ }
       [ -n "${BASH_REMATCH[2]}" ] && continue
-      if [[ $word =~ $safe_leaf ]]; then
+      # A bare word is a safe field in object shorthand, as in {number}.
+      if [[ $safe_paths == *" $word "* ]]; then
         has_safe=true
       elif [[ $word =~ $reduce_words ]]; then
         has_reduce=true
@@ -256,7 +261,9 @@ check_part() {
       [[ $part =~ $text_endpoint ]]; then
       block "this endpoint returns comments or reviews."
     fi
-    if [[ $part == *issues* || $part == *pulls* ]] && [[ $part =~ $item_path ]]; then
+    if [[ $part == *issues/* || $part == *pulls/* ]] && [[ $part =~ $item_one ]]; then
+      check_filters "$part"
+    elif [[ $part == *issues* || $part == *pulls* ]] && [[ $part =~ $item_list ]]; then
       check_filters "$part"
     fi
   fi
@@ -272,22 +279,26 @@ check_part() {
 # One command: quoted strings, escaped characters, and other characters up to
 # |, ; or &.
 part_re="^(\"([^\"\\\\]|\\\\.)*\"|'[^']*'|\\\\.|[^|;&\"'\\\\])*"
+# A command substitution with no unquoted parenthesis inside, or a backquoted
+# command. Inner ones match first.
+subst_re=$'\\$\\(("([^"\\\\]|\\\\.)*"|\'[^\']*\'|[^()"\'])*\\)|`[^`]*`'
 
-# Split into lines in memory: a here-string needs a temporary file in bash 3.2.
-set -f
-IFS=$'\n'
-# shellcheck disable=SC2206 # Splitting on line breaks is the point; set -f stops globbing.
-lines=($cmd)
-IFS=$' \t\n'
-set +f
-previous=''
-for line in ${lines[@]+"${lines[@]}"}; do
-  [[ $line == *gh[[:space:]]* || $line == *[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]* ]] || continue
-  # A line that just passed passes again.
-  [[ $line == "$previous" ]] && continue
-  previous=$line
+# Checks one command line. Each command substitution is checked as its own
+# command line, then stands as $S in the outer one, as a variable would.
+check_line() {
+  local rest=$1 part sub
+  if [[ $rest == *\$\(* || $rest == *\`* ]]; then
+    while [[ $rest =~ $subst_re ]]; do
+      sub=${BASH_REMATCH[0]}
+      case $sub in
+        \$\(*) check_line "${sub:2:${#sub}-3}" ;;
+        *) check_line "${sub:1:${#sub}-2}" ;;
+      esac
+      rest=${rest/"$sub"/\$S}
+    done
+  fi
   # Redirections such as 2>&1 are not command breaks.
-  rest=${line//&>/>}
+  rest=${rest//&>/>}
   rest=${rest//>&/>}
   rest=${rest//<&/<}
   while [ -n "$rest" ]; do
@@ -302,5 +313,21 @@ for line in ${lines[@]+"${lines[@]}"}; do
     # Drop the part and the character that ended it.
     rest=${rest:$((${#part} + 1))}
   done
+}
+
+# Split into lines in memory: a here-string needs a temporary file in bash 3.2.
+set -f
+IFS=$'\n'
+# shellcheck disable=SC2206 # Splitting on line breaks is the point; set -f stops globbing.
+lines=($cmd)
+IFS=$' \t\n'
+set +f
+previous=''
+for line in ${lines[@]+"${lines[@]}"}; do
+  [[ $line == *gh[[:space:]]* || $line == *[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]* ]] || continue
+  # A line that just passed passes again.
+  [[ $line == "$previous" ]] && continue
+  previous=$line
+  check_line "$line"
 done
 exit 0
