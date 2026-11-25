@@ -315,9 +315,9 @@ for path in ${adds[@]+"${adds[@]}"}; do
   name=${path##*/}
   [ ! -e "$path" ] && [ ! -L "$path" ] || fail "$(shown "$path") appeared while installing. Run again."
   mkdir -p "$(dirname "$path")"
-  # -n: a link to a folder that appeared here meanwhile fails the call, so ln
-  # never writes a link inside that folder.
-  ln -sn "$kit/skills/$name" "$path"
+  # Naming the parent folder makes ln fail if anything appeared at $path
+  # meanwhile, instead of writing a link inside it.
+  ln -s "$kit/skills/$name" "${path%/*}/"
   echo "linked: $(shown "$path")"
 done
 for path in ${drops[@]+"${drops[@]}"}; do
@@ -330,7 +330,7 @@ for path in ${relinks[@]+"${relinks[@]}"}; do
   name=${path##*/}
   is_kit_link "$path" "$name" || fail "$(shown "$path") changed while installing. Run again."
   rm -- "$path"
-  ln -sn "$kit/skills/$name" "$path"
+  ln -s "$kit/skills/$name" "${path%/*}/"
   echo "relinked: $(shown "$path")"
 done
 for path in ${parked[@]+"${parked[@]}"}; do
