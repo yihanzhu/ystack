@@ -47,6 +47,9 @@ expect 'ruleset read piped to grep -F' 0 "$(command_input 'gh api repos/o/r/rule
 expect 'ruleset read piped to sort -f' 0 "$(command_input 'gh api repos/o/r/rulesets | sort -f')"
 expect 'ruleset read with HEAD' 0 "$(command_input 'gh api --method=head repos/o/r/rulesets')"
 expect 'read the default branch' 0 "$(command_input 'gh api repos/o/r --jq .default_branch')"
+# shellcheck disable=SC2016 # The agent's command holds a literal $(...).
+expect 'ruleset read with GET inside $(...)' 0 "$(command_input 'count=$(gh api repos/o/r/rulesets -X GET)')"
+expect 'read PR files into a file named merge' 0 "$(command_input 'gh api repos/o/r/pulls/42/files > /tmp/merge-files.json')"
 
 expect 'push to main' 2 "$(command_input 'git push origin main')"
 expect 'push HEAD to main' 2 "$(command_input 'git push origin HEAD:main')"
@@ -77,6 +80,8 @@ expect 'REST merge with a substituted PR number' 2 "$(command_input 'gh api -X P
 expect 'ruleset DELETE with a quoted pipe' 2 "$(command_input "gh api repos/o/r/rulesets/1 --jq '.a|.b' -X DELETE")"
 expect 'ruleset PUT with a quoted &' 2 "$(command_input "gh api 'repos/o/r/rulesets/1?a=1&b=2' -X PUT")"
 expect 'ruleset POST with a quoted & and fields' 2 "$(command_input "gh api 'repos/o/r/rulesets?a=1&b=2' -f name=gate")"
+expect 'ruleset write with an escaped quote before a quoted pipe' 2 "$(command_input 'gh api repos/o/r/rulesets/1 -H "X-Note: a\"|b" -X OPTIONS')"
+expect 'ruleset DELETE with an escaped pipe' 2 "$(command_input 'gh api repos/o/r/rulesets/1 --jq .a\|.b -X DELETE')"
 expect 'ruleset DELETE with a quoted semicolon' 2 "$(command_input "gh api repos/o/r/rulesets/1 -H 'X-A: a;b' -X DELETE")"
 # shellcheck disable=SC2016 # The agent's command holds a literal $M.
 expect 'ruleset write with a variable method' 2 "$(command_input 'gh api -X "$M" repos/o/r/rulesets/1 -f enforcement=disabled')"
@@ -115,6 +120,15 @@ expect 'GraphQL merge' 2 "$(command_input 'gh api graphql -f query="mutation { m
 expect 'GraphQL auto-merge' 2 "$(command_input 'gh api graphql -f query="mutation { enablePullRequestAutoMerge(input: {}) { clientMutationId } }"')"
 expect 'input that is not JSON' 2 'not json'
 expect 'truncated JSON' 2 '{"tool_input":{"command":"git st'
+
+# A here-string needs a temporary file in bash 3.2. If that file cannot be
+# made, the loop it feeds is skipped and the hook lets the command through.
+if grep -q '<<<' "$hook"; then
+  echo "not ok - the hook uses no here-string"
+  failures=$((failures + 1))
+else
+  echo "ok - the hook uses no here-string"
+fi
 
 # The hook needs jq. With no jq on PATH, it blocks.
 no_jq=$(mktemp -d) || exit 1

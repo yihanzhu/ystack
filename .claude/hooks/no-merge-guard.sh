@@ -45,18 +45,22 @@ push_main="git${flags}[[:space:]]+push[^|;&]*[[:space:]:+\"'](refs/heads/)?main(
 pr_merge="gh${flags}[[:space:]]+pr${flags}[[:space:]]+[\"']?merge([^[:alnum:]_-]|\$)"
 repo_edit="gh${flags}[[:space:]]+repo${flags}[[:space:]]+edit([^[:alnum:]_-]|\$)"
 
-# One command: quoted strings, and other characters up to |, ; or &.
-part_re="^(\"[^\"]*\"|'[^']*'|[^|;&\"'])*"
+# One command: quoted strings, escaped characters, and other characters up to
+# |, ; or &.
+part_re="^(\"([^\"\\\\]|\\\\.)*\"|'[^']*'|\\\\.|[^|;&\"'\\\\])*"
+# The PR number may be a word, a variable or a command substitution.
+rest_merge="pulls/([^/[:space:]]+|\\\$\\([^)]*\\)|\`[^\`]*\`)/merge([^[:alnum:]_-]|\$)"
 gate_path="/rulesets([^[:alnum:]_-]|\$)|branches/[^/[:space:]]+/protection|default_branch"
-# Grouped short flags count too, as in -iX or -if.
-method_re="(^|[[:space:]])(-[A-Za-z]*X|--method|--request)([[:space:]]+|=)?([^[:space:]]*)"
+# Grouped short flags count too, as in -iX or -if. The value ends at a space,
+# a closing parenthesis, a backquote or a redirection.
+method_re="(^|[[:space:]])(-[A-Za-z]*X|--method|--request)([[:space:]]+|=)?([^[:space:])\`<>]*)"
 read_method="^[\"']?([Gg][Ee][Tt]|[Hh][Ee][Aa][Dd])[\"']?\$"
 field_re="(^|[[:space:]])(-[A-Za-z]*[fF]|--field|--raw-field|--input)"
 gh_api='gh[[:space:]]+api'
 
 check_part() {
   local part=$1 rest has_method=false
-  [[ $part == *pulls/*/merge* ]] && block "$merge_msg"
+  [[ $part == *pulls/*/merge* ]] && [[ $part =~ $rest_merge ]] && block "$merge_msg"
   if [[ $part == *--default-branch* ]] && [[ $part =~ $repo_edit ]]; then
     block "$gate_msg"
   fi
@@ -74,7 +78,15 @@ check_part() {
   fi
 }
 
-while IFS= read -r line; do
+# Split into lines in memory: a here-string needs a temporary file in bash 3.2,
+# and a failed one would skip the loop.
+set -f
+IFS=$'\n'
+# shellcheck disable=SC2206 # Splitting on line breaks is the point; set -f stops globbing.
+lines=($joined)
+IFS=$' \t\n'
+set +f
+for line in ${lines[@]+"${lines[@]}"}; do
   [[ $line =~ $guarded_words ]] || continue
   if [[ $line == *push* ]] && [[ $line =~ $push_main ]]; then
     block "no direct pushes to main. Push a branch and open a PR."
@@ -93,5 +105,5 @@ while IFS= read -r line; do
     # Drop the part and the character that ended it.
     rest=${rest:$((${#part} + 1))}
   done
-done <<< "$joined"
+done
 exit 0
