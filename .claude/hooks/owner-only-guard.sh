@@ -37,9 +37,11 @@ case $tool in
   *) [ -n "$cmd$url" ] || fail "the hook got no command and no URL." ;;
 esac
 
-if printf '%s' "$url" | grep -Eiq '^https?://(www\.)?github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+'; then
+if printf '%s' "$url" | grep -Eiq 'https?://(www\.)?github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+'; then
   block "this page holds issue or PR text from any account."
 fi
+# Backslash line breaks are removed, as bash removes them.
+cmd=${cmd//$'\\\n'/}
 # Every rule below needs `gh` and a space, so other commands pass at once.
 [[ $cmd =~ gh[[:space:]] ]] || exit 0
 
@@ -63,8 +65,9 @@ while IFS= read -r part; do
     if printf '%s' "$part" | grep -Eq '/(comments|reviews|timeline|events)([^A-Za-z]|$)'; then
       block "this endpoint returns comments or reviews."
     fi
-    # One issue or PR, a list of them, or an issue search.
-    if printf '%s' "$part" | grep -Eq "(issues|pulls)/[0-9]+([^0-9/]|\$)|(^|[/[:space:]\"'])(issues|pulls)([?[:space:]\"']|\$)|search/issues"; then
+    # One issue or PR, a list of them (of a repository, an organization, the
+    # user, or all), or an issue search. A repository named issues is not a list.
+    if printf '%s' "$part" | grep -Eq "(issues|pulls)/[0-9]+([^0-9/]|\$)|(repos/[^/[:space:]]+/[^/[:space:]]+/|orgs/[^/[:space:]]+/|user/|[[:space:]\"']/?)(issues|pulls)([?[:space:]\"']|\$)|search/issues"; then
       if ! printf '%s' "$part" | grep -Eq -- '(--jq|-q)[[:space:]=]' ||
         printf '%s' "$part" | grep -Eq 'body|title'; then
         block "issue and PR objects hold their body and title; filter them with --jq."

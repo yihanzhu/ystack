@@ -38,6 +38,7 @@ expect 'other web page' 0 "$(fetch_call 'https://docs.github.com/en/rest')"
 expect 'multi-line command with a plain last line' 0 "$(bash_call $'gh pr view 841 --json state\ngit status')"
 expect 'API PR list filtered' 0 "$(bash_call "gh api repos/o/r/pulls --jq '.[].number'")"
 expect 'API issue search count' 0 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq .total_count")"
+expect 'API read of a repository named issues' 0 "$(bash_call 'gh api repos/acme/issues')"
 expect 'API PR files filtered' 0 "$(bash_call "gh api repos/o/r/pulls/841/files --jq '.[].filename'")"
 state_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequest(number: 1) { state } } }"'
 expect 'GraphQL state only' 0 "$(bash_call "$state_query")"
@@ -70,8 +71,12 @@ comments_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\")
 expect 'GraphQL comments' 2 "$(bash_call "$comments_query")"
 title_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequests(first: 5) { nodes { title } } } }"'
 expect 'GraphQL titles' 2 "$(bash_call "$title_query")"
-expect 'Bash call with no command' 2 '{"tool_name":"Bash","tool_input":{"command":""}}'
-expect 'WebFetch call with no URL' 2 '{"tool_name":"WebFetch","tool_input":{"url":""}}'
+expect 'GraphQL titles across a line break' 2 "$(bash_call "${title_query/ -f/ \\$'\n'  -f}")"
+expect 'Bash call with no command but a URL' 2 '{"tool_name":"Bash","tool_input":{"command":"","url":"https://docs.github.com"}}'
+expect 'WebFetch call with no URL but a command' 2 '{"tool_name":"WebFetch","tool_input":{"url":"","command":"pwd"}}'
+expect 'issue page after a line break' 2 "$(fetch_call $'\nhttps://github.com/o/r/issues/12')"
+expect 'API issue list of all repositories' 2 "$(bash_call 'gh api /issues')"
+expect 'API issue list of an organization' 2 "$(bash_call 'gh api orgs/o/issues')"
 expect 'no tool name and no fields' 2 '{"tool_input":{}}'
 expect 'truncated JSON' 2 '{"tool_name":"Bash","tool_input":{"command":"git st'
 
