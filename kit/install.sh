@@ -34,16 +34,21 @@ fail() {
   exit 2
 }
 
-# Names a path as ~/... when it is under HOME.
+home_real=$(cd "$HOME" 2> /dev/null && pwd -P) || home_real=$HOME
+
+# Names a path as ~/... when it is under HOME, by HOME's given or real path.
 shown() {
   # shellcheck disable=SC2088 # A literal ~ is the point: agents expand it.
   case $1 in
     "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+    "$home_real"/*) printf '~/%s' "${1#"$home_real"/}" ;;
     *) printf '%s' "$1" ;;
   esac
 }
 
-kit=$(cd "$(dirname "$0")" && pwd)
+# The real path, the way `git rev-parse` names it when the post-merge hook runs
+# this script. Then every run writes the same link targets and imports.
+kit=$(cd "$(dirname "$0")" && pwd -P)
 work=$(mktemp -d) || exit 2
 temps=()
 cleanup() {

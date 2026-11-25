@@ -5,6 +5,9 @@ set -u
 root=$(git rev-parse --show-toplevel) || exit 1
 scratch=$(mktemp -d) || exit 1
 [ -n "$scratch" ] && [ -d "$scratch" ] || exit 1
+# The installer names the kit by its real path. On macOS the temporary folder is
+# reached through a link, so the expected paths here use the real one too.
+scratch=$(cd "$scratch" && pwd -P) || exit 1
 trap 'rm -rf "$scratch"' EXIT
 failures=0
 
