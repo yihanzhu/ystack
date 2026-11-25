@@ -12,6 +12,7 @@ set -uo pipefail
 shellcheck_version=0.11.0
 
 skip_tree=false
+[ $# -le 1 ] || { echo "usage: scripts/check.sh [--skip-tree]" >&2; exit 2; }
 case ${1:-} in
   '') ;;
   --skip-tree) skip_tree=true ;;
@@ -32,7 +33,7 @@ elif ! git ls-files -z -- '*.sh' .githooks | xargs -0 -r shellcheck -x -S style;
   failed+=(shellcheck)
 fi
 
-# The public-repo test needs the pinned gitleaks.
+# The public-repo test needs the pinned gitleaks. This also installs it in CI.
 echo "== gitleaks"
 if ! scripts/get-gitleaks.sh; then
   failed+=(gitleaks)
