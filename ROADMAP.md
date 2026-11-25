@@ -27,7 +27,7 @@ or a few small PRs. Each PR has one concern.
 ## 10. ystack's own layer pass
 
 - Run the five layers on ystack. Rules that must always hold become checks.
-- Until this step ends, the owner merges every ystack PR.
+- Until this step ends, every ystack PR needs the owner's OK.
 
 ## 11. A second codebase
 
