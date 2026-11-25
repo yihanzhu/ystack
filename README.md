@@ -25,7 +25,7 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `AGENTS.md` | Rules and checks for agents in this repo. `CLAUDE.md` imports it. |
 | `.claude/hooks/no-merge-guard.sh` | Blocks Claude Code from merging PRs, pushing to `main`, and changing rulesets, branch protection or the default branch. |
 | `.claude/hooks/owner-only-guard.sh` | Blocks Claude Code from reading issue and PR text directly. |
-| `scripts/gh-read.sh` | Reads an issue or PR and hides text from accounts other than the owner's. |
+| `scripts/gh-read.sh` | Runs `kit/skills/ystack-layer-pass/gh-read.sh`, which reads an issue or PR and hides text from accounts other than the owner's. |
 | `scripts/check-public.sh` | Blocks the owner's blocked terms, secrets and machine-specific values. The term list is never committed. |
 | `scripts/check.sh` | Runs every check in this repo: shellcheck, the tests and the public-repo tree scan. |
 | `scripts/get-gitleaks.sh` | Gets the pinned secret scanner and checks its digest. |
