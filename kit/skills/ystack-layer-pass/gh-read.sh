@@ -7,8 +7,7 @@
 # Only text that the owner wrote, and that nobody else edited last, counts as
 # instructions. Text from any other account is hidden behind a notice. With
 # --show-data it is printed inside a fence with a random marker, as data.
-# The title is printed for every item, as data: GitHub does not record who
-# last changed it.
+# By the owner's decision, the title is printed for every item, as data.
 # The owner is --owner LOGIN (default yihanzhu). The output names it.
 #
 # Exit 0: printed. Exit 2: could not read the item completely.
