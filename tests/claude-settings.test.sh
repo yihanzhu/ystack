@@ -27,6 +27,18 @@ expect_hook() {
   fi
 }
 
+# jq reads a stream of JSON values; Claude Code needs one object.
+if jq -e -s 'length == 1 and (.[0] | type == "object")' "$settings" > /dev/null 2>&1; then
+  pass 'settings.json is one JSON object'
+else
+  fail 'settings.json is one JSON object'
+fi
+if jq -e -s '(.[0].disableAllHooks // false) == false' "$settings" > /dev/null 2>&1; then
+  pass 'settings.json does not disable hooks'
+else
+  fail 'settings.json does not disable hooks'
+fi
+
 expect_hook Bash no-merge-guard.sh
 expect_hook Bash owner-only-guard.sh
 expect_hook WebFetch owner-only-guard.sh

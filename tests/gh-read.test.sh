@@ -177,10 +177,11 @@ else
   fail 'the reader sends its query through gh'
 fi
 
-# Prints each field of a GraphQL query as a dotted path, such as
-# query.repository.issueOrPullRequest.[Issue].author.login. Arguments are dropped.
+# Prints each field of a GraphQL query as a dotted path of response keys, such
+# as query.repository.issueOrPullRequest.[Issue].author.login. Comments and
+# arguments are dropped. An alias is the key, as in the response.
 field_paths() {
-  tr '\n' ' ' < "$1" | sed -e 's/([^)]*)//g' -e 's/[{}]/ & /g' | awk '
+  sed 's/#.*//' "$1" | tr '\n' ' ' | sed -e 's/([^)]*)//g' -e 's/[{}:]/ & /g' | awk '
     { for (i = 1; i <= NF; i++) tok[++n] = $i }
     END {
       for (i = 1; i <= n; i++) {
@@ -189,6 +190,7 @@ field_paths() {
         if (t == "..." && tok[i + 1] == "on" && tok[i + 3] == "{") {
           stack[++depth] = "[" tok[i + 2] "]"; i += 3; continue
         }
+        if (tok[i + 1] == ":") i += 2
         if (tok[i + 1] == "{") { stack[++depth] = t; i++; continue }
         path = ""
         for (d = 1; d <= depth; d++) path = path stack[d] "."
@@ -218,6 +220,8 @@ missing=''
 for want in $wanted; do
   printf '%s\n' "$paths" | grep -q -x -F -- "$want" || missing="$missing $want"
 done
+# A directive such as @skip can drop a field; the parser does not follow them.
+sed 's/#.*//' "$scratch/query.txt" | grep -q '@' && missing="$missing (a directive)"
 if [ -z "$missing" ]; then
   pass 'the reader query asks for every field the trust logic reads'
 else
