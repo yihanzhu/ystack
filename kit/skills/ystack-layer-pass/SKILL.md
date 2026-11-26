@@ -5,7 +5,7 @@ description: "Go over a codebase one layer at a time (design, checks, verificati
 
 # Layer Pass
 
-Inputs: the target repository and the main-branch commit the pass starts from. Output: a list of findings for the owner to pick from, then one small PR for each picked finding. This skill grants no merge, write or settings authority.
+Inputs: the target repository and the main-branch commit the pass starts from. Output: a list of findings for the owner to pick from, then one small change for each picked finding. This skill grants no merge, write or settings authority.
 
 Each layer has one question. Each layer down costs more. A fix goes into the highest layer that can hold it. Only what no layer can answer reaches the owner.
 
@@ -15,10 +15,10 @@ Each layer has one question. Each layer down costs more. A fix goes into the hig
 2. Go over the five layers in order. For each layer, write what holds today, then the findings.
 3. Put each fix in the highest layer that can hold it: design before checks, checks before written rules. A written rule that must hold every time becomes a check.
 4. Show the owner the findings, with a recommendation for each. The owner picks. Do only what the owner picked. When the target is private, keep the findings out of public repositories.
-5. Open one PR for each picked finding. Order the PRs by what each one needs:
+5. Make one change for each picked finding. Use a PR, or the change route that the target's written rules name, such as one reviewed commit in its main checkout. Order the changes by what each one needs:
    - If the owner picked a finding that makes one local command run the same steps as CI, it goes first.
    - Then design, check and verification fixes.
-   - Then written rules, after the checks they depend on have merged. A rule that a check now holds stays out of the written rules. When the target is public, a rule from agent memory or the owner's notes goes in only after private, employer and machine-specific detail is removed, and the owner has seen the exact text.
+   - Then written rules, after the checks they depend on are on main. A rule that a check now holds stays out of the written rules. When the target is public, a rule from agent memory or the owner's notes goes in only after private, employer and machine-specific detail is removed, and the owner has seen the exact text.
    - The merge gate last.
 6. Leave the result in the target repository: in its checks and in its `AGENTS.md`.
 
