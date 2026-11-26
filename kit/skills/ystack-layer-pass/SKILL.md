@@ -77,6 +77,10 @@ A gate that exists only in writing never lets a PR merge without the owner.
 - Judge the content, not only the path. A path rule lets these through: a skip added to an existing test, a major version in a lockfile or an override, a change to a script that CI runs.
 - Test the script with one case for each kind and one for each way out of it.
 
+### Writers without a PR
+
+An unattended writer, such as a scheduled job, can commit straight to the default branch with no PR. Such a writer merges without the owner, so treat it as a kind. Name the paths it may change. Name the guard and the independent check that its changes pass before they land. Name how the owner sees what it did. Where any of these is missing, that is a finding for the owner.
+
 ### Always the owner
 
 - Changes the owner judges by looking: design, copy, new pages, posts.
