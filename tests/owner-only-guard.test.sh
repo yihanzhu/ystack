@@ -78,6 +78,23 @@ expect 'curl of check runs' 0 "$(bash_call 'curl -s https://api.github.com/repos
 expect 'repository page' 0 "$(fetch_call 'https://github.com/o/r')"
 expect 'file page' 0 "$(fetch_call 'https://github.com/o/r/blob/main/README.md')"
 
+# Titles are data that agents may read. A title read passes; a body read on the
+# same path blocks.
+expect 'API PR title' 0 "$(bash_call 'gh api repos/o/r/pulls/1 --jq .title')"
+expect 'API PR body on the same path' 2 "$(bash_call 'gh api repos/o/r/pulls/1 --jq .body')"
+expect 'curl of the same PR path, which no filter narrows' 2 "$(bash_call 'curl -s https://api.github.com/repos/o/r/pulls/1')"
+expect 'API PR list of numbers and titles' 0 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | {number, title}'")"
+expect 'API issue search titles' 0 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq '.items[] | .title'")"
+expect 'API issue search bodies' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq '.items[] | .body'")"
+pr_title_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequest(number: 1) { title } } }"'
+expect 'GraphQL PR title' 0 "$(bash_call "$pr_title_query")"
+expect 'GraphQL PR body on the same path' 2 "$(bash_call "${pr_title_query/title/body}")"
+title_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequests(first: 5) { nodes { title } } } }"'
+expect 'GraphQL titles' 0 "$(bash_call "$title_query")"
+title_event_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { issue(number: 1) { timelineItems(first: 5) { nodes { ... on RenamedTitleEvent { previousTitle currentTitle } } } } } }"'
+expect 'GraphQL renamed titles' 0 "$(bash_call "$title_event_query")"
+expect_message 'no-filter message names only the body' "$(bash_call 'gh api repos/o/r/issues/12')" 'hold their body;'
+
 expect 'plain issue view' 2 "$(bash_call 'gh issue view 12')"
 expect 'plain PR view' 2 "$(bash_call 'gh pr view 841')"
 expect 'PR view with comments' 2 "$(bash_call 'gh pr view 841 --comments')"
@@ -104,9 +121,7 @@ expect 'API issue search' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r'")"
 expect 'API PR list filtered to bodies' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[].body'")"
 comments_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { issue(number: 1) { comments(first: 5) { nodes { bodyText } } } } }"'
 expect 'GraphQL comment bodies' 2 "$(bash_call "$comments_query")"
-title_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { pullRequests(first: 5) { nodes { title } } } }"'
-expect 'GraphQL titles' 2 "$(bash_call "$title_query")"
-expect 'GraphQL titles across a line break' 2 "$(bash_call "${title_query/ -f/ \\$'\n'  -f}")"
+expect 'GraphQL body across a line break' 2 "$(bash_call "${graphql_cmd/ -f/ \\$'\n'  -f}")"
 expect 'Bash call with no command but a URL' 2 '{"tool_name":"Bash","tool_input":{"command":"","url":"https://docs.github.com"}}'
 expect 'WebFetch call with no URL but a command' 2 '{"tool_name":"WebFetch","tool_input":{"url":"","command":"pwd"}}'
 expect 'issue page after a line break' 2 "$(fetch_call $'\nhttps://github.com/o/r/issues/12')"
@@ -116,7 +131,6 @@ expect 'no tool name and no fields' 2 '{"tool_input":{}}'
 expect 'truncated JSON' 2 '{"tool_name":"Bash","tool_input":{"command":"git st'
 expect 'API PR bodies through a quoted pipe' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | .body'")"
 expect 'API issue objects with bodies' 2 "$(bash_call "gh api repos/o/r/issues --jq '.[] | {number, body}'")"
-expect 'API issue search titles' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq '.items[] | .title'")"
 expect 'API issue with the identity filter' 2 "$(bash_call 'gh api repos/o/r/issues/12 --jq .')"
 expect 'API PR list with .[]' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[]'")"
 expect 'API issue search with .items' 2 "$(bash_call "gh api 'search/issues?q=repo:o/r' --jq .items")"
@@ -143,10 +157,8 @@ expect 'API PRs through sort_by' 2 "$(bash_call "gh api repos/o/r/pulls --jq 'so
 expect 'API PRs through group_by' 2 "$(bash_call "gh api repos/o/r/pulls --jq 'group_by(.state)'")"
 expect 'API PR with a safe filter, then an attached body filter' 2 "$(bash_call 'gh api repos/o/r/pulls/1 -q .number -q.body')"
 expect 'API PR with --jq only inside another argument' 2 "$(bash_call "gh api repos/o/r/pulls/1 -H 'X-A: --jq .number'")"
-title_event_query='gh api graphql -f query="{ repository(owner: \"o\", name: \"r\") { issue(number: 1) { timelineItems(first: 5) { nodes { ... on RenamedTitleEvent { previousTitle currentTitle } } } } } }"'
-expect 'GraphQL renamed titles' 2 "$(bash_call "$title_event_query")"
 expect 'API open PRs through select' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | select(.draft == false)'")"
-expect 'API PR titles in a string' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | \"\\(.number) \\(.title)\"'")"
+expect 'API PR bodies in a string' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | \"\\(.number) \\(.body)\"'")"
 expect 'API PR with a template' 2 "$(bash_call "gh api repos/o/r/pulls/1 --jq .number -t '{{.body}}'")"
 expect 'GraphQL body on the next line' 2 "$(bash_call $'gh api graphql -f query=\'\n{ repository(owner:"o",name:"r") { pullRequest(number:1) { body } } }\'')"
 # shellcheck disable=SC2016 # The agent's command holds a literal $q.

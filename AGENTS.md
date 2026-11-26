@@ -76,7 +76,8 @@ paste it into a chat, an issue or a PR.
 - `.claude/hooks/owner-only-guard.sh` blocks Claude Code from reading issue,
   PR, review and comment text directly, by Bash or WebFetch, and points to
   `scripts/gh-read.sh`. Codex has no such hook; it follows the rule above.
-  Titles in lists, PR diffs and CI logs are not covered.
+  By the owner's decision, the hook does not hide titles. Agents read them as
+  data. PR diffs and CI logs are not covered.
 - Claude Code runs both `.claude/hooks` scripts only in sessions opened in a
   ystack checkout, and it runs them from the owner's main checkout. So a merged
   change to either hook is live only after that checkout is updated.
