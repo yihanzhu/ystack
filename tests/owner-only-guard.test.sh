@@ -158,7 +158,7 @@ expect 'API PRs through group_by' 2 "$(bash_call "gh api repos/o/r/pulls --jq 'g
 expect 'API PR with a safe filter, then an attached body filter' 2 "$(bash_call 'gh api repos/o/r/pulls/1 -q .number -q.body')"
 expect 'API PR with --jq only inside another argument' 2 "$(bash_call "gh api repos/o/r/pulls/1 -H 'X-A: --jq .number'")"
 expect 'API open PRs through select' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | select(.draft == false)'")"
-expect 'API PR bodies in a string' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | \"\\(.number) \\(.body)\"'")"
+expect 'API PR safe fields in a string still block' 2 "$(bash_call "gh api repos/o/r/pulls --jq '.[] | \"\\(.number) \\(.title)\"'")"
 expect 'API PR with a template' 2 "$(bash_call "gh api repos/o/r/pulls/1 --jq .number -t '{{.body}}'")"
 expect 'GraphQL body on the next line' 2 "$(bash_call $'gh api graphql -f query=\'\n{ repository(owner:"o",name:"r") { pullRequest(number:1) { body } } }\'')"
 # shellcheck disable=SC2016 # The agent's command holds a literal $q.
