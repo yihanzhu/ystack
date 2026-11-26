@@ -62,9 +62,10 @@ fast='gh[[:space:]]|github\.com'
 shopt -u nocasematch
 
 # GraphQL fields that hold text. A query may span lines or sit in a variable,
-# so the whole command is read.
+# so the whole command is read. Titles are not text here: the owner lets agents
+# read them, as data.
 gh_api='gh[[:space:]]+api'
-graphql_text='[Bb]ody|[Tt]itle|userContentEdits'
+graphql_text='[Bb]ody|userContentEdits'
 if [[ $cmd == *graphql* ]] && [[ $cmd =~ $gh_api ]] && [[ $cmd =~ $graphql_text ]]; then
   block "this query reads text from any account."
 fi
@@ -85,7 +86,7 @@ item_list="(repos/$repo/|orgs/[^/[:space:]]+/|user/|commits/[^/[:space:]\"']+/|[
 
 # The only fields a --jq filter on issues or PRs may name. Other lists below
 # are made from this one.
-safe_fields='number state id node_id html_url url draft merged merged_at created_at updated_at closed_at total_count user.login author.login labels[].name head.sha head.ref base.ref mergeable mergeable_state'
+safe_fields='number title state id node_id html_url url draft merged merged_at created_at updated_at closed_at total_count user.login author.login labels[].name head.sha head.ref base.ref mergeable mergeable_state'
 filter_msg="a --jq filter on issues or PRs may name only these fields: ${safe_fields// /, }."
 # Paths as safe_filter writes them, with [] removed, between spaces.
 safe_paths=" ${safe_fields//\[\]/} "
@@ -189,8 +190,8 @@ safe_filter() {
   $out_found
 }
 
-nofilter_msg="issue and PR objects hold their body and title; filter them with --jq on safe fields."
-template_msg="a --template can print the body and title."
+nofilter_msg="issue and PR objects hold their body; filter them with --jq on safe fields."
+template_msg="a --template can print the body."
 shell_word="^[[:space:]]*((\"([^\"\\\\]|\\\\.)*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\])+)"
 
 # Checks the jq filter of a value $1 as gh receives it. A value with quotes or
