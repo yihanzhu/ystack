@@ -4,8 +4,9 @@
   missing information materially affects the outcome, and continue independent work.
   Carry forward authorization within its scope; prepare a reviewable result before
   requesting any additional approval you need.
-- Merge a pull request only when the target repository's written merge rules
-  allow that kind of change. Otherwise the owner merges it.
+- Merge a pull request only when the owner has approved it in the owner's own
+  words, or when the target repository's written merge rules allow that kind of
+  change. Otherwise the owner merges it.
 - Follow explicit user requests over skill guidelines, subject to higher-priority
   instructions and tool permissions. If a skill blocks or redirects the work,
   link the exact file, quote the instruction, and explain whether the restriction
