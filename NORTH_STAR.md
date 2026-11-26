@@ -53,7 +53,7 @@ Only what no layer can answer reaches the owner.
 1. The kit lives in this repo. Claude Code and Codex load it from here on each of
    the owner's machines.
 2. The layer pass is written down here and works by hand. The first target is the
-   owner's site. It has had all five layers (PRs 283 to 291 in the site's
+   owner's site. It has had all five layers (PRs 283 to 289 in the site's
    repository). Its merge gate goes live when that repository can enforce one.
 3. A second codebase gets the same pass with the same kit. The kit does not
    change to fit it.
