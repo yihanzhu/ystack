@@ -158,6 +158,72 @@ else
   pass 'missing item fails'
 fi
 
+# The fixtures above carry every field, so they cannot show that the live query
+# asks for them. A fake gh on PATH records the query that the reader sends.
+mkdir "$scratch/bin"
+cat > "$scratch/bin/gh" <<'EOF'
+#!/bin/bash
+for arg; do
+  case $arg in query=*) printf '%s\n' "${arg#query=}" > "$GH_READ_TEST_QUERY" ;; esac
+done
+cat "$GH_READ_TEST_RESPONSE"
+EOF
+chmod +x "$scratch/bin/gh"
+if GH_READ_TEST_QUERY="$scratch/query.txt" GH_READ_TEST_RESPONSE="$scratch/owner.json" \
+  PATH="$scratch/bin:$PATH" "$read_item" --repo o/r 7 > /dev/null 2>&1 &&
+  [ -s "$scratch/query.txt" ]; then
+  pass 'the reader sends its query through gh'
+else
+  fail 'the reader sends its query through gh'
+fi
+
+# Prints each field of a GraphQL query as a dotted path, such as
+# query.repository.issueOrPullRequest.[Issue].author.login. Arguments are dropped.
+field_paths() {
+  tr '\n' ' ' < "$1" | sed -e 's/([^)]*)//g' -e 's/[{}]/ & /g' | awk '
+    { for (i = 1; i <= NF; i++) tok[++n] = $i }
+    END {
+      for (i = 1; i <= n; i++) {
+        t = tok[i]
+        if (t == "}") { depth--; continue }
+        if (t == "..." && tok[i + 1] == "on" && tok[i + 3] == "{") {
+          stack[++depth] = "[" tok[i + 2] "]"; i += 3; continue
+        }
+        if (tok[i + 1] == "{") { stack[++depth] = t; i++; continue }
+        path = ""
+        for (d = 1; d <= depth; d++) path = path stack[d] "."
+        print path t
+      }
+    }'
+}
+
+# The fields that the trust logic reads: who wrote and who last edited each
+# text, and whether more pages exist.
+people() { printf '%s\n' "$1.author.login" "$1.author.__typename" "$1.editor.login"; }
+item=query.repository.issueOrPullRequest
+wanted=$(
+  for kind in Issue PullRequest; do
+    people "$item.[$kind]"
+    people "$item.[$kind].comments.nodes"
+    echo "$item.[$kind].comments.pageInfo.hasNextPage"
+  done
+  reviews="$item.[PullRequest].reviews"
+  people "$reviews.nodes"
+  echo "$reviews.pageInfo.hasNextPage"
+  people "$reviews.nodes.comments.nodes"
+  echo "$reviews.nodes.comments.pageInfo.hasNextPage"
+)
+paths=$(field_paths "$scratch/query.txt" 2>/dev/null)
+missing=''
+for want in $wanted; do
+  printf '%s\n' "$paths" | grep -q -x -F -- "$want" || missing="$missing $want"
+done
+if [ -z "$missing" ]; then
+  pass 'the reader query asks for every field the trust logic reads'
+else
+  fail "the reader query asks for every field the trust logic reads; missing:$missing"
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"
   exit 1
